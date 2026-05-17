@@ -349,7 +349,8 @@ def run(cfg):
     trainer = pl.Trainer(
         **cfg.trainer,
         callbacks=[
-            spt.callbacks.CPUOffloadCallback(),
+            # TODO: CPUOffloadCallback was removed/renamed in stable_pretraining 0.1.4 — restore once the replacement is known
+            # spt.callbacks.CPUOffloadCallback(),
             SaveCkptCallback(
                 run_name=cfg.output_model_name,
                 cfg=cfg,

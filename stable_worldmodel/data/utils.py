@@ -110,6 +110,7 @@ def _resolve_dataset(name: str, datasets_dir: Path) -> Path:
     if not local.is_absolute():
         local = datasets_dir / local
 
+    print(f"Resolving dataset for {name} at {local}")
     if local.exists():
         return local
 
@@ -185,6 +186,7 @@ def _resolve_dataset_hf(repo_id: str, datasets_dir: Path) -> Path:
     (``*.lance``, ``*.h5``, …).
     """
     local_dir = datasets_dir / repo_id.replace('/', '--')
+    print(f"Resolving dataset for {repo_id} at {local_dir}")
 
     if local_dir.is_dir() and any(local_dir.iterdir()):
         logging.info(f'Using cached dataset for {repo_id} at {local_dir}')
