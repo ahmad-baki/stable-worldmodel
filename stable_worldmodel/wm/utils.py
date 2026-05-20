@@ -28,7 +28,7 @@ def save_pretrained(
 
     if config is None:
         logging.warning('No config! Loading will have to be done manually.')
-        return
+        return checkpoint_path
 
     if config_key is not None and config_key in config:
         config = config[config_key]
@@ -41,7 +41,7 @@ def save_pretrained(
 
     logging.info(f'📦📦📦 Model saved to {checkpoint_path} 📦📦📦')
 
-    return
+    return checkpoint_path
 
 
 def load_pretrained(name: str, cache_dir: str = None, extra_args=None):

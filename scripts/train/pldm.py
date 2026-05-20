@@ -23,8 +23,7 @@ from stable_worldmodel.wm.pldm.module import (
 )
 from stable_worldmodel.wm.pldm import PLDM
 from stable_worldmodel.wm.loss import PLDMLoss, TemporalStraighteningLoss
-from lightning.pytorch.callbacks import Callback
-from stable_worldmodel.wm.utils import save_pretrained
+from stable_worldmodel.wm.callbacks import SaveCkptCallback
 
 
 def get_img_preprocessor(source: str, target: str, img_size: int = 224):
@@ -34,35 +33,6 @@ def get_img_preprocessor(source: str, target: str, img_size: int = 224):
     )
     resize = dt.transforms.Resize(img_size, source=source, target=target)
     return dt.transforms.Compose(to_image, resize)
-
-
-class SaveCkptCallback(Callback):
-    """Callback to save model checkpoint after each epoch using save_pretrained."""
-
-    def __init__(self, run_name, cfg, epoch_interval: int = 1):
-        super().__init__()
-        self.run_name = run_name
-        self.cfg = cfg
-        self.epoch_interval = epoch_interval
-
-    def on_train_epoch_end(self, trainer, pl_module):
-        super().on_train_epoch_end(trainer, pl_module)
-
-        if trainer.is_global_zero:
-            if (trainer.current_epoch + 1) % self.epoch_interval == 0:
-                self._save(pl_module.model, trainer.current_epoch + 1)
-
-            # save final epoch
-            if (trainer.current_epoch + 1) == trainer.max_epochs:
-                self._save(pl_module.model, trainer.current_epoch + 1)
-
-    def _save(self, model, epoch):
-        save_pretrained(
-            model,
-            run_name=self.run_name,
-            config=self.cfg,
-            filename=f'weights_epoch_{epoch}.pt',
-        )
 
 
 def pldm_forward(self, batch, stage, cfg):

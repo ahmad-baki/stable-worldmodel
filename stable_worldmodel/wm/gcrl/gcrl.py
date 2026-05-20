@@ -2,6 +2,19 @@ import torch
 from einops import rearrange, repeat
 from torch import nn
 
+from .module import (
+    Attention,
+    DoublePredictorWrapper,
+    Embedder,
+    ExpectileLoss,
+    FeedForward,
+    MetricValuePredictor,
+    Predictor,
+    QPredictor,
+    SelfAttentionTransformer,
+    Transformer,
+)
+
 
 class GCRL(torch.nn.Module):
     def __init__(
@@ -209,4 +222,16 @@ class GCRL(torch.nn.Module):
         return actions
 
 
-__all__ = ['GCRL']
+__all__ = [
+    'GCRL',
+    'Attention',
+    'DoublePredictorWrapper',
+    'Embedder',
+    'ExpectileLoss',
+    'FeedForward',
+    'MetricValuePredictor',
+    'Predictor',
+    'QPredictor',
+    'SelfAttentionTransformer',
+    'Transformer',
+]
