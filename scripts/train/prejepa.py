@@ -237,9 +237,16 @@ def run(cfg):
             )
 
     rnd_gen = torch.Generator().manual_seed(cfg.seed)
-    train_set, val_set = spt.data.random_split(
-        dataset, [cfg.train_split, 1 - cfg.train_split], generator=rnd_gen
-    )
+    if cfg.get('split_by_trajectory', False):
+        # Whole episodes go to one side only — no clip leakage across split.
+        train_set, val_set = swm.data.trajectory_split(
+            dataset, cfg.train_split, rnd_gen
+        )
+    else:
+        # Clip-level split (overlapping windows from one episode may leak).
+        train_set, val_set = spt.data.random_split(
+            dataset, [cfg.train_split, 1 - cfg.train_split], generator=rnd_gen
+        )
 
     train_loader = DataLoader(
         train_set,

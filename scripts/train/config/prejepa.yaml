@@ -20,6 +20,9 @@ frameskip: 5
 batch_size: 32
 num_workers: 16
 train_split: 0.9
+# true: split whole trajectories into train/val (no clip leakage).
+# false: original clip-level random_split.
+split_by_trajectory: true
 
 # --- Backbone ---
 backbone:

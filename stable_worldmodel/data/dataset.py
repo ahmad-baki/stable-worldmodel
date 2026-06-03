@@ -16,6 +16,7 @@ from typing import Any
 
 import numpy as np
 import torch
+from torch.utils.data import Subset
 
 
 class Dataset:
@@ -493,9 +494,77 @@ class GoalDataset:
         return steps
 
 
+def episode_ids_per_clip(dataset) -> np.ndarray:
+    """Return a global episode id for every flat clip index in *dataset*.
+
+    Works for a clip-level :class:`Dataset` (``clip_indices`` holds
+    ``(episode, start)`` pairs) and for a :class:`ConcatDataset` of them, where
+    each sub-dataset's local episode ids are offset by its cumulative episode
+    count so ids stay globally unique.
+
+    Args:
+        dataset: A clip-indexed dataset or a concat of them.
+
+    Returns:
+        Array of shape ``(len(dataset),)`` mapping flat clip index to episode.
+    """
+    if hasattr(dataset, 'clip_indices'):
+        return np.fromiter(
+            (ep for ep, _ in dataset.clip_indices),
+            dtype=np.int64,
+            count=len(dataset.clip_indices),
+        )
+    if hasattr(dataset, 'datasets') and hasattr(dataset, '_ep_cum'):
+        return np.concatenate(
+            [
+                episode_ids_per_clip(ds) + int(dataset._ep_cum[k])
+                for k, ds in enumerate(dataset.datasets)
+            ]
+        )
+    raise TypeError(
+        f'Cannot derive episode ids for {type(dataset).__name__}; '
+        'trajectory-level split needs a clip-indexed dataset.'
+    )
+
+
+def trajectory_split(
+    dataset, train_frac: float, generator: torch.Generator | None = None
+) -> list[Subset]:
+    """Split *dataset* into ``(train, val)`` along whole-trajectory boundaries.
+
+    Every clip from a given episode lands entirely in one side, so no
+    trajectory leaks across the split (unlike a clip-level ``random_split``,
+    where overlapping windows from one episode can straddle both sides).
+
+    The fraction is applied to the **episode count**, not the clip count, so
+    the realized clip ratio can drift slightly when episodes vary in length.
+
+    Args:
+        dataset: A clip-indexed dataset or a :class:`ConcatDataset` of them.
+        train_frac: Fraction of episodes assigned to the train split.
+        generator: Generator for the episode shuffle. A fixed-seed generator
+            gives a reproducible split.
+
+    Returns:
+        ``[train_subset, val_subset]``.
+    """
+    ep_ids = episode_ids_per_clip(dataset)
+    unique_eps = np.unique(ep_ids)
+    perm = torch.randperm(len(unique_eps), generator=generator).numpy()
+    n_train = int(round(train_frac * len(unique_eps)))
+    train_eps = unique_eps[perm[:n_train]]
+
+    is_train = np.isin(ep_ids, train_eps)
+    train_idx = np.flatnonzero(is_train).tolist()
+    val_idx = np.flatnonzero(~is_train).tolist()
+    return [Subset(dataset, train_idx), Subset(dataset, val_idx)]
+
+
 __all__ = [
     'Dataset',
     'MergeDataset',
     'ConcatDataset',
     'GoalDataset',
+    'episode_ids_per_clip',
+    'trajectory_split',
 ]
