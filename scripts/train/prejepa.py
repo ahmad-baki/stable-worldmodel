@@ -303,12 +303,17 @@ def run(cfg):
     )
 
     # --- Training ---
-    run_id = cfg.get('subdir') or ''
-    run_dir = Path(
-        swm.data.utils.get_cache_dir(sub_folder='checkpoints'), run_id
+    run_name = (
+        cfg.wandb.config.name if cfg.wandb.enabled else cfg.output_model_name
+    )
+    job_id = os.environ.get('SLURM_JOB_ID', 'local')
+    run_dir = (
+        swm.data.utils.get_cache_dir(sub_folder='checkpoints')
+        / cfg.output_model_name
+        / job_id
     )
     run_dir.mkdir(parents=True, exist_ok=True)
-    logging.info(f'Run ID: {run_id}')
+    logging.info(f'Run dir: {run_dir}')
 
     with open(run_dir / 'config.yaml', 'w') as f:
         OmegaConf.save(cfg, f)
@@ -324,9 +329,10 @@ def run(cfg):
             # TODO: CPUOffloadCallback was removed/renamed in stable_pretraining 0.1.4 — restore once the replacement is known
             # spt.callbacks.CPUOffloadCallback(),
             SaveCkptCallback(
-                run_name=cfg.output_model_name,
+                run_name=run_name,
+                save_subdir=f'{cfg.output_model_name}/{job_id}',
                 cfg=cfg,
-                epoch_interval=5,
+                epoch_interval=1,
             ),
             pl.pytorch.callbacks.LearningRateMonitor(logging_interval='step'),
         ],

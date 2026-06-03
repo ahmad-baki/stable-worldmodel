@@ -11,8 +11,8 @@ wandb:
   enabled: true
   config:
     entity: ahmad-baki-karlsruhe-institute-of-technology
-    project: worldbench
-    name: ${output_model_name}
+    project: worldbench-world
+    name: ${output_model_name}_${oc.env:SLURM_JOB_ID,local}
     id: ${hydra:job.id}
     resume: allow
     log_model: False

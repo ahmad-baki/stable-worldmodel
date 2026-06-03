@@ -780,7 +780,7 @@ def run(cfg):
     # First train value function
     ivl_value_model = get_ivl_value_model(cfg)
 
-    cache_dir = swm.data.utils.get_cache_dir(sub_folder='checkpoints')
+    cache_dir = swm.data.utils.get_cache_dir(sub_folder=f'checkpoints/{cfg.output_model_name}/{cfg.dataset_name}')
 
     if cfg.get('train_value', True):
         dump_object_callback = SaveCkptCallback(

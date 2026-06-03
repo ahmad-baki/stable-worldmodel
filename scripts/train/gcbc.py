@@ -315,7 +315,8 @@ def run(cfg):
     data = get_data(cfg)
     gcbc_policy = get_gcbc_policy(cfg)
 
-    cache_dir = swm.data.utils.get_cache_dir(sub_folder='checkpoints')
+    job_id = os.environ.get('SLURM_JOB_ID', 'local')
+    cache_dir = swm.data.utils.get_cache_dir(sub_folder=f'checkpoints/{cfg.output_model_name}/{cfg.dataset_name.split(".")[0]}/{job_id}')
     dump_object_callback = SaveCkptCallback(
         run_name=cfg.output_model_name,
         cfg=cfg,

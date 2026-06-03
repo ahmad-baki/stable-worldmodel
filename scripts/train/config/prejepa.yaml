@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - launcher: local
+  - launcher: local_world
 
 hydra:
   job:
@@ -59,7 +59,8 @@ trainer:
   strategy: ddp
   devices: auto
   accelerator: gpu
-  precision: 16-mixed
+  precision: bf16-mixed
   gradient_clip_val: 1.0
+  val_check_interval: 0.2
 
 dump_object: true

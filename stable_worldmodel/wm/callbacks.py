@@ -1,5 +1,6 @@
 import math
 
+import torch
 import wandb
 from lightning.pytorch.callbacks import Callback
 from loguru import logger as logging
@@ -10,9 +11,17 @@ from stable_worldmodel.wm.utils import save_pretrained
 class SaveCkptCallback(Callback):
     """Save model checkpoint after each epoch via save_pretrained and log a wandb artifact reference."""
 
-    def __init__(self, run_name, cfg, epoch_interval: int = 1, val_metric_key: str = 'val/loss'):
+    def __init__(
+        self,
+        run_name,
+        cfg,
+        epoch_interval: int = 1,
+        val_metric_key: str = 'val/loss',
+        save_subdir: str | None = None,
+    ):
         super().__init__()
         self.run_name = run_name
+        self.save_subdir = save_subdir or run_name
         self.cfg = cfg
         self.epoch_interval = epoch_interval
         self.val_metric_key = val_metric_key
@@ -35,12 +44,21 @@ class SaveCkptCallback(Callback):
                 self._log_artifact(ckpt_path, epoch, val_loss)
 
     def _save(self, model, epoch):
-        return save_pretrained(
+        ckpt_path = save_pretrained(
             model,
-            run_name=self.run_name,
+            run_name=self.save_subdir,
             config=self.cfg,
             filename=f'weights_epoch_{epoch}.pt',
         )
+        # Optionally also dump the full module object so eval scripts that load
+        # via AutoActionableModel (which globs for *_object.ckpt) work without a
+        # manual conversion step. Gated on the existing (previously unused)
+        # dump_object config flag.
+        if ckpt_path is not None and self.cfg.get('dump_object', False):
+            object_path = ckpt_path.parent / f'{self.run_name}_object.ckpt'
+            torch.save(model, object_path)
+            logging.info(f'📦 Saved model object to {object_path}')
+        return ckpt_path
 
     def _get_val_loss(self, trainer):
         metric = trainer.callback_metrics.get(self.val_metric_key)
