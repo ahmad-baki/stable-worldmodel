@@ -431,8 +431,13 @@ class World:
             results['episode_successes'][ep_idx] = world.terminateds[env_idx]
             results['seeds'][ep_idx] = world.envs.seeds[env_idx]
             if frames is not None:
+                outcome = (
+                    'success'
+                    if results['episode_successes'][ep_idx]
+                    else 'failure'
+                )
                 _save_video(
-                    Path(video) / f'episode_{ep_idx}.mp4',
+                    Path(video) / f'episode_{ep_idx}_{outcome}.mp4',
                     frames.pop(env_idx, []),
                 )
 
@@ -521,7 +526,14 @@ class World:
         if frames:
             Path(video).mkdir(parents=True, exist_ok=True)
             for env_idx, f in frames.items():
-                _save_video(Path(video) / f'env_{env_idx}.mp4', f)
+                outcome = (
+                    'success'
+                    if results['episode_successes'][env_idx]
+                    else 'failure'
+                )
+                _save_video(
+                    Path(video) / f'env_{env_idx}_{outcome}.mp4', f
+                )
         return results
 
 

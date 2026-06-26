@@ -53,6 +53,8 @@ def get_data(cfg):
         cache_dir=cache_dir,
         keys_to_load=keys_to_load,
         keys_to_cache=keys_to_cache,
+        seed=cfg.seed,
+        num_traj=cfg.num_trajectories,
     )
 
     norm_action_transform = get_column_normalizer(dataset, 'action', 'action')
@@ -316,11 +318,17 @@ def run(cfg):
     gcbc_policy = get_gcbc_policy(cfg)
 
     job_id = os.environ.get('SLURM_JOB_ID', 'local')
-    cache_dir = swm.data.utils.get_cache_dir(sub_folder=f'checkpoints/{cfg.output_model_name}/{cfg.dataset_name.split(".")[0]}/{job_id}')
+    run_subdir = (
+        f'{cfg.output_model_name}/{cfg.dataset_name.split(".")[0]}/{job_id}'
+    )
+    cache_dir = swm.data.utils.get_cache_dir(
+        sub_folder=f'checkpoints/{run_subdir}'
+    )
     dump_object_callback = SaveCkptCallback(
         run_name=cfg.output_model_name,
         cfg=cfg,
         epoch_interval=3,
+        save_subdir=run_subdir,
     )
 
     trainer = pl.Trainer(

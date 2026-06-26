@@ -41,6 +41,8 @@ class Dataset:
         frameskip: int = 1,
         num_steps: int = 1,
         transform: Callable[[dict], dict] | None = None,
+        seed: int | None = None,
+        num_traj: int | None =None
     ) -> None:
         self.lengths = lengths
         self.offsets = offsets
@@ -48,11 +50,19 @@ class Dataset:
         self.num_steps = num_steps
         self.span = num_steps * frameskip
         self.transform = transform
+
+        episode_ids = range(len(lengths))
+        if num_traj is not None and num_traj < len(lengths):
+            rng = np.random.default_rng(seed)
+            episode_ids = sorted(
+            rng.choice(len(lengths), size=num_traj, replace=False).tolist()
+        )
+
         self.clip_indices = [
             (ep, start)
-            for ep, length in enumerate(lengths)
-            if length >= self.span
-            for start in range(length - self.span + 1)
+            for ep in episode_ids
+            if lengths[ep] >= self.span
+            for start in range(lengths[ep] - self.span + 1)
         ]
 
     @property

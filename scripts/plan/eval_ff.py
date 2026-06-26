@@ -2,9 +2,7 @@
 
 import os
 
-
 os.environ['MUJOCO_GL'] = 'egl'
-
 
 import time
 from pathlib import Path
@@ -17,7 +15,46 @@ from omegaconf import DictConfig, OmegaConf
 from sklearn import preprocessing
 from torchvision.transforms import v2 as transforms
 
+import pickle
+
 import stable_worldmodel as swm
+import numpy as np, gymnasium as gym
+
+import sys
+# scripts/ lives at the repo root and is not part of the installed package,
+# so add the repo root (parent of scripts/) to the path before importing it.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.train.prejepa import get_encoder
+# from stable_baselines3.common.vec_env import VecNormalize
+
+from stable_baselines3 import A2C, DDPG, DQN, PPO, SAC, TD3
+ALGOS = {'a2c': A2C, 'ddpg': DDPG, 'dqn': DQN, 'ppo': PPO, 'sac': SAC, 'td3': TD3}
+
+class SB3Policy(swm.policy.BasePolicy):
+    def __init__(self, algo, ckpt_path, vecnorm_path=None, **kw):
+        super().__init__(**kw)
+        self.type = algo
+        self.model = ALGOS[algo].load(ckpt_path, device='cpu')
+        # Load only the saved normalization stats for inference; VecNormalize.load
+        # would call set_venv(None) and crash, so unpickle directly instead.
+        if vecnorm_path:
+            with open(vecnorm_path, 'rb') as f:
+                self.vecnorm = pickle.load(f)
+            self.vecnorm.training = False
+        else:
+            self.vecnorm = None
+        space = self.model.observation_space          # read keys from the model
+        self.obs_keys = list(space.spaces) if isinstance(space, gym.spaces.Dict) else None
+
+    def get_action(self, infos, **kw):
+        if self.obs_keys is not None:                 # Dict obs
+            obs = {k: np.asarray(infos[k]).squeeze(1) for k in self.obs_keys}
+        else:                                         # flat Box obs
+            obs = np.asarray(infos['observation']).squeeze(1)  # wrapper's name for non-dict obs
+        if self.vecnorm:
+            obs = self.vecnorm.normalize_obs(obs)
+        actions, _ = self.model.predict(obs, deterministic=True)
+        return actions
 
 
 def img_transform():
@@ -31,6 +68,35 @@ def img_transform():
         ]
     )
     return transform
+
+
+class EncoderTransform:
+    """Chain ImageNet preprocessing with a frozen backbone forward pass.
+
+    Applies ``img_transform`` to a single image, batches it, runs the encoder,
+    and returns the per-sample embedding (batch dim stripped) on CPU.
+    """
+
+    def __init__(self, backbone, interp_pos_enc=True, device='cuda'):
+        self.transform = img_transform()
+        self.backbone = backbone.to(device).eval().requires_grad_(False)
+        self.interp_pos_enc = interp_pos_enc
+        self.device = device
+
+    @torch.no_grad()
+    def __call__(self, img):
+        x = self.transform(img).unsqueeze(0).to(self.device)  # (1, 3, 224, 224)
+        try:
+            out = self.backbone(x, interpolate_pos_encoding=self.interp_pos_enc)
+        except TypeError:  # e.g. resnet classifier doesn't take the kwarg
+            out = self.backbone(x)
+        emb = getattr(out, 'last_hidden_state', None)
+        if emb is None:
+            emb = getattr(out, 'pooler_output', None)
+        if emb is None:
+            emb = out.logits        # (1, P, pixel_dim)
+            emb = emb.mean(dim=1)   # (1, pixel_dim)
+        return emb.squeeze(0).cpu() # (pixel_dim,)
 
 
 def get_episodes_length(dataset, episodes):
@@ -69,9 +135,9 @@ def resolve_wandb_policy(cfg):
     api = wandb.Api()
     run = api.run(f'{wb.entity}/{wb.project}/{wb.run}')
 
-    artifacts = [a for a in run.logged_artifacts() if a.type == 'world-model']
+    artifacts = [a for a in run.logged_artifacts() if a.type == 'model']
     if not artifacts:
-        raise ValueError(f"No 'world-model' artifact logged by run {wb.run}")
+        raise ValueError(f"No 'model' artifact logged by run {wb.run}")
 
     alias = wb.get('alias', 'best')
     artifact = next(
@@ -107,10 +173,18 @@ def run(cfg: DictConfig):
     )
 
     # create the transform
-    transform = {
-        'pixels': img_transform(),
-        'goal': img_transform(),
-    }
+    if cfg.get('backbone'):
+        backbone, embed_dim, num_patches, interp_pos_enc = get_encoder(cfg)
+        encoder_transform = EncoderTransform(backbone, interp_pos_enc)
+        transform = {
+            'pixels': encoder_transform,
+            'goal': encoder_transform,
+        }
+    else:
+        transform = {
+            'pixels': img_transform(),
+            'goal': img_transform(),
+        }
 
     dataset = get_dataset(cfg, cfg.eval.dataset_name)
 
@@ -135,21 +209,40 @@ def run(cfg: DictConfig):
 
     # -- run evaluation
     policy = cfg.get('policy', 'random')
+    rl_algo = cfg.get('rl_algo', None)
     wandb_run = cfg.get('wandb', {}).get('run', None)
     train_run = None  # wandb run to log the success rate back to
 
+
+    
     if wandb_run:
         # Load the policy from the wandb run's reference artifact.
         ckpt_path, train_run = resolve_wandb_policy(cfg)
-        model = swm.policy.AutoActionableModel(str(ckpt_path))
-        model = model.to('cuda').eval()
-        model.requires_grad_(False)
-        policy = swm.policy.FeedForwardPolicy(
-            model=model, process=process, transform=transform
-        )
         results_path = ckpt_path.parent / 'eval'
-    elif policy != 'random':
-        model = swm.policy.AutoActionableModel(cfg.policy)
+    else:
+        ckpt_path = Path(cfg.policy)
+        if ckpt_path.is_file():
+            sub_folder = str(ckpt_path.parent / 'eval')
+        else:
+            sub_folder = str(ckpt_path / 'eval')
+
+        results_path = Path(
+            swm.data.utils.get_cache_dir(sub_folder='checkpoints'),
+            sub_folder
+        )
+
+    if policy == 'random' and not wandb_run:
+        policy = swm.policy.RandomPolicy()
+        results_path = Path(__file__).parent
+    elif policy == 'noop' and not wandb_run:
+        policy = swm.policy.NoOpPolicy()
+        results_path = Path(__file__).parent
+    elif rl_algo and rl_algo in ALGOS:
+        # find vecnorm path
+        vecnorm_path = get_vecnorm_path(cfg, ckpt_path)
+        policy = SB3Policy(rl_algo, ckpt_path, vecnorm_path)
+    else:
+        model = swm.policy.AutoActionableModel(str(ckpt_path))
         model = model.to('cuda')
         model = model.eval()
         model.requires_grad_(False)
@@ -157,14 +250,6 @@ def run(cfg: DictConfig):
         policy = swm.policy.FeedForwardPolicy(
             model=model, process=process, transform=transform
         )
-        results_path = Path(
-            swm.data.utils.get_cache_dir(sub_folder='checkpoints'),
-            cfg.policy,
-            'eval',
-        )
-    else:
-        policy = swm.policy.RandomPolicy()
-        results_path = Path(__file__).parent
 
     print(f"result path: {results_path}")
 
@@ -245,6 +330,19 @@ def run(cfg: DictConfig):
             f"Logged eval/success_rate={metrics['success_rate']} "
             f'to wandb run {cfg.wandb.run}'
         )
+
+def env_dir_name(env_id: str) -> str:
+    """
+    matches rl-zoo exactly (slash + colon)
+    """
+    name = env_id.replace('/', '-')          # same rule rl-zoo uses
+    return name.split(':')[1] if ':' in name else name
+
+def get_vecnorm_path(cfg, ckpt_path):
+    env_dir = env_dir_name(cfg.world.env_name)          
+    vecnorm_path = ckpt_path.parent / env_dir / 'vecnormalize.pkl'
+    vecnorm_path = vecnorm_path if vecnorm_path.exists() else None
+    return vecnorm_path
 
 
 if __name__ == '__main__':

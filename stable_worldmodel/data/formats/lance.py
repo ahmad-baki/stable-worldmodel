@@ -146,6 +146,8 @@ class LanceDataset(Dataset):
         episode_index_column: str = 'episode_idx',
         step_index_column: str = 'step_idx',
         connect_kwargs: dict[str, Any] | None = None,
+        seed: int | None = None,
+        num_traj: int | None = None,
     ) -> None:
         # Accept either `path=` (preferred, matches other readers) or `uri=`.
         loc = path if path is not None else uri
@@ -207,7 +209,7 @@ class LanceDataset(Dataset):
 
         self._update_fetch_columns()
 
-        super().__init__(lengths, offsets, frameskip, num_steps, transform)
+        super().__init__(lengths, offsets, frameskip, num_steps, transform, seed, num_traj)
 
         if keys_to_merge:
             for target, source in keys_to_merge.items():

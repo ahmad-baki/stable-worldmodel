@@ -24,6 +24,7 @@ def register(id, entry_point, discrete=False, **kwargs):
 register(
     id='swm/PushT-v1',
     entry_point='stable_worldmodel.envs.pusht.env:PushT',
+    max_episode_steps=300,
 )
 
 register(
@@ -215,3 +216,5 @@ try:
     from stable_worldmodel.envs import ale  # noqa: F401
 except ImportError:
     pass
+
+

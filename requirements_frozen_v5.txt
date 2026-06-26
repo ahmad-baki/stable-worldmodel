@@ -1,0 +1,1 @@
+Error getting pip freeze: Command '['/hkfs/home/project/hk-project-p0024638/usjuy/worldbench/stable-worldmodel/.venv/bin/python', '-m', 'pip', 'freeze']' returned non-zero exit status 1.

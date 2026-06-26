@@ -39,9 +39,13 @@ class SaveCkptCallback(Callback):
 
         if is_interval or is_final:
             val_loss = self._get_val_loss(trainer)
-            ckpt_path = self._save(pl_module.model, epoch)
-            if ckpt_path is not None:
-                self._log_artifact(ckpt_path, epoch, val_loss)
+            ckpt_path, object_path = self._save(pl_module.model, epoch)
+            # Prefer referencing the full-module object so the artifact loads
+            # directly (torch.load / AutoCostModel) with no architecture rebuild;
+            # fall back to the state-dict .pt when dump_object is off.
+            ref_path = object_path or ckpt_path
+            if ref_path is not None:
+                self._log_artifact(ref_path, epoch, val_loss)
 
     def _save(self, model, epoch):
         ckpt_path = save_pretrained(
@@ -50,15 +54,20 @@ class SaveCkptCallback(Callback):
             config=self.cfg,
             filename=f'weights_epoch_{epoch}.pt',
         )
-        # Optionally also dump the full module object so eval scripts that load
-        # via AutoActionableModel (which globs for *_object.ckpt) work without a
-        # manual conversion step. Gated on the existing (previously unused)
-        # dump_object config flag.
+        # Dump the full module object *per epoch* so the wandb artifact can
+        # reference a directly-loadable module (torch.load / AutoCostModel) with
+        # no architecture rebuild. The '_object.ckpt' suffix keeps
+        # swm.policy.AutoCostModel's '*_object.ckpt' glob working; the epoch in
+        # the name avoids the single-file overwrite so every version is kept.
+        object_path = None
         if ckpt_path is not None and self.cfg.get('dump_object', False):
-            object_path = ckpt_path.parent / f'{self.run_name}_object.ckpt'
+            object_path = (
+                ckpt_path.parent
+                / f'{self.run_name}_epoch_{epoch:04d}_object.ckpt'
+            )
             torch.save(model, object_path)
             logging.info(f'📦 Saved model object to {object_path}')
-        return ckpt_path
+        return ckpt_path, object_path
 
     def _get_val_loss(self, trainer):
         metric = trainer.callback_metrics.get(self.val_metric_key)
@@ -69,7 +78,7 @@ class SaveCkptCallback(Callback):
         except (TypeError, ValueError):
             return None
 
-    def _log_artifact(self, ckpt_path, epoch, val_loss):
+    def _log_artifact(self, ref_path, epoch, val_loss):
         run = wandb.run
         if run is None:
             return
@@ -80,10 +89,13 @@ class SaveCkptCallback(Callback):
 
         artifact = wandb.Artifact(
             name=self.run_name,
-            type='world-model',
+            type='model',
             metadata=metadata,
         )
-        artifact.add_reference(f'file://{ckpt_path.absolute()}')
+        # Reference the on-disk file (full module object when dump_object is on,
+        # else the state-dict .pt). file:// refs resolve only on the filesystem
+        # that logged them.
+        artifact.add_reference(f'file://{ref_path.absolute()}')
 
         aliases = [f'epoch_{epoch:04d}', 'latest']
         if val_loss is not None and val_loss < self.best_val_loss:

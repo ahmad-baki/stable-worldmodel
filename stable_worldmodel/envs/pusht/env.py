@@ -62,10 +62,15 @@ class PushT(gym.Env):
                     dtype=np.float64,
                 ),
                 'state': spaces.Box(
-                    low=np.array([0, 0, 0, 0, 0, -ws, -ws]),
+                    low=np.array([0, 0, 0, 0, -np.pi * 2, -ws, -ws]),
                     high=np.array([ws, ws, ws, ws, np.pi * 2, ws, ws]),
                     dtype=np.float64,
                 ),
+                'desired_goal': spaces.Box(
+                    low=np.array([0, 0, 0, 0, -np.pi * 2]),
+                    high=np.array([ws, ws, ws, ws, np.pi * 2]),
+                    dtype=np.float64,
+                )
             }
         )
 
@@ -304,7 +309,7 @@ class PushT(gym.Env):
         state = self._get_obs()
         proprio = np.concatenate((state[:2], state[-2:]))
 
-        observation = {'proprio': proprio, 'state': state}
+        observation = {'proprio': proprio, 'state': state, 'desired_goal': goal_state[:5]}
         info = self._get_info()
 
         return observation, info
@@ -332,7 +337,7 @@ class PushT(gym.Env):
         # make the observation
         state = self._get_obs()
         proprio = np.concatenate((state[:2], state[-2:]))
-        observation = {'proprio': proprio, 'state': state}
+        observation = {'proprio': proprio, 'state': state, 'desired_goal': self.goal_state[:5]}
 
         # collect info
         info = self._get_info()
@@ -341,18 +346,27 @@ class PushT(gym.Env):
         terminated, distance = self.eval_state(self.goal_state, state)
         reward = -distance  # the closer the better
 
+        # SB3 logs rollout/success_rate from info['is_success'] on terminal steps
+        info['is_success'] = bool(terminated)
+
         truncated = False
         return observation, reward, terminated, truncated, info
 
     def eval_state(self, goal_state, cur_state):
         # success if position difference is < 20, and angle difference < np.pi/9
-        pos_diff = np.linalg.norm(goal_state[:4] - cur_state[:4])
+        pos_diff = np.linalg.norm(goal_state[2:4] - cur_state[2:4])
+
+        # curr_state = {agent x, y, block x, y, angle, agent delt_x, delt_y}
         angle_diff = np.abs(goal_state[4] - cur_state[4])
         angle_diff = np.minimum(angle_diff, 2 * np.pi - angle_diff)
+
         success = pos_diff < 20 and angle_diff < np.pi / 9
         state_dist = np.linalg.norm(goal_state - cur_state)
 
-        return success, state_dist
+        # TODO: DEBUGGING PURPOSES pos_diff + distance to block is reward cur_state has (agent x, y, box x, y, angle)
+        agent_to_block = np.linalg.norm(cur_state[0:2] - cur_state[2:4])    # agent → the block
+        return success, pos_diff + agent_to_block + angle_diff
+        # return success, state_dist
 
     def render(self):
         return self._render_frame(self.render_mode)
@@ -527,7 +541,12 @@ class PushT(gym.Env):
         self.space.step(self.dt)
 
     def _set_goal_state(self, goal_state):
+        # # TODO: DEBUGGING PURPOSES Keep single goal state through whole training
+        # if self.goal_state is not None:
+        #     return
         self.goal_state = goal_state
+        self.goal_pose = np.array([goal_state[2], goal_state[3], goal_state[4]])
+
 
     def _setup(self):
         ## create the space with physics

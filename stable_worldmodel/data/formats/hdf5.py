@@ -44,6 +44,8 @@ class HDF5Dataset(Dataset):
         cache_dir: str | Path | None = None,
         path: str | Path | None = None,
         storage_options: dict | None = None,
+        seed: int | None = None,
+        num_traj: int | None = None,
     ) -> None:
         if path is not None:
             raw = str(path)
@@ -68,7 +70,7 @@ class HDF5Dataset(Dataset):
                 self._cache[key] = f[key][:]
                 logging.info(f"Cached '{key}' from '{self.h5_path}'")
 
-        super().__init__(lengths, offsets, frameskip, num_steps, transform)
+        super().__init__(lengths, offsets, frameskip, num_steps, transform, seed, num_traj)
 
         if keys_to_merge:
             for target, source in keys_to_merge.items():

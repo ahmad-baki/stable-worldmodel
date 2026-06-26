@@ -219,6 +219,23 @@ class RandomPolicy(BasePolicy):
             self.env.action_space.seed(seed)
 
 
+class NoOpPolicy(BasePolicy):
+    """Policy that always emits a zero action (a "do nothing" baseline).
+
+    For relative-action envs (e.g. PushT) a zero action targets the current
+    position, so the agent stays put. Useful for measuring the success rate
+    attributable purely to start states that already satisfy the goal.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.type = 'noop'
+
+    def get_action(self, obs: Any, **kwargs: Any) -> np.ndarray:
+        """Return an all-zero action shaped like the action space."""
+        return np.zeros_like(self.env.action_space.sample())
+
+
 class ExpertPolicy(BasePolicy):
     """Policy using expert demonstrations or heuristics."""
 
@@ -503,6 +520,11 @@ def _load_model_with_attribute(run_name, attribute_name, cache_dir=None):
         ckpt_files = list(run_path.glob('*_object.ckpt'))
         ckpt_files.sort(key=lambda x: x.stat().st_ctime, reverse=True)
         path = ckpt_files[0]
+        logging.info(f'Loading model from checkpoint: {path}')
+    elif run_path.is_file():
+        # Direct path to an *_object.ckpt file (e.g. resolved from a wandb
+        # reference artifact). Use it as-is instead of appending the suffix.
+        path = run_path
         logging.info(f'Loading model from checkpoint: {path}')
     else:
         path = Path(f'{run_path}_object.ckpt')

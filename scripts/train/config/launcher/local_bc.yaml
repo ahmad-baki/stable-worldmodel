@@ -13,6 +13,6 @@ wandb:
     entity: ahmad-baki-karlsruhe-institute-of-technology
     project: worldbench-bc
     name: ${output_model_name}_${oc.env:SLURM_JOB_ID,local}
-    id: ${hydra:job.id}
+    id: ${output_model_name}_${oc.env:SLURM_JOB_ID,local}
     resume: allow
     log_model: False

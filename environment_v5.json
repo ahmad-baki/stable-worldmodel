@@ -1,0 +1,76 @@
+{
+  "timestamp": "2026-06-26T14:27:07.416099",
+  "python": {
+    "version": "3.10.20 (main, May 10 2026, 19:27:29) [Clang 22.1.3 ]",
+    "version_info": {
+      "major": 3,
+      "minor": 10,
+      "micro": 20
+    },
+    "executable": "/hkfs/home/project/hk-project-p0024638/usjuy/worldbench/stable-worldmodel/.venv/bin/python",
+    "prefix": "/hkfs/home/project/hk-project-p0024638/usjuy/worldbench/stable-worldmodel/.venv"
+  },
+  "system": {
+    "platform": "Linux-5.14.0-427.127.1.el9_4.x86_64-x86_64-with-glibc2.34",
+    "system": "Linux",
+    "release": "5.14.0-427.127.1.el9_4.x86_64",
+    "machine": "x86_64",
+    "processor": "x86_64",
+    "hostname": "hkn0909.localdomain"
+  },
+  "packages": {
+    "pip_freeze": "Error getting pip freeze: Command '['/hkfs/home/project/hk-project-p0024638/usjuy/worldbench/stable-worldmodel/.venv/bin/python', '-m', 'pip', 'freeze']' returned non-zero exit status 1.",
+    "key_packages": {},
+    "total_packages": 0
+  },
+  "cuda": {
+    "nvidia_smi_output": "NVIDIA H100, 595.71.05, 95830 MiB",
+    "driver_version": "595.71.05"
+  },
+  "git": {
+    "commit_hash": "fb3f032356bc51c620260da3cdc14ca334157d14",
+    "branch": "main",
+    "has_uncommitted_changes": true,
+    "uncommitted_changes": "M scripts/plan/config/pusht.yaml\n M scripts/plan/eval_ff.py\n M scripts/train/config/gcbc.yaml\n M scripts/train/config/launcher/local_bc.yaml\n M scripts/train/gcbc.py\n M stable_worldmodel/data/dataset.py\n M stable_worldmodel/data/formats/hdf5.py\n M stable_worldmodel/data/formats/lance.py\n M stable_worldmodel/envs/__init__.py\n M stable_worldmodel/envs/pusht/env.py\n M stable_worldmodel/policy.py\n M stable_worldmodel/wm/callbacks.py\n?? environment.json\n?? environment_v1.json\n?? environment_v2.json\n?? environment_v3.json\n?? environment_v4.json\n?? requirements_frozen.txt\n?? requirements_frozen_v1.txt\n?? requirements_frozen_v2.txt\n?? requirements_frozen_v3.txt\n?? requirements_frozen_v4.txt\n?? scripts/plan/config/pusht_dino.yaml",
+    "remote_url": null
+  },
+  "slurm": {
+    "SLURM_JOB_ID": "4112937",
+    "SLURM_JOB_NAME": "bc_train",
+    "SLURM_JOB_PARTITION": "dev_accelerated-h100",
+    "SLURM_JOB_NODELIST": "hkn0909",
+    "SLURM_JOB_NUM_NODES": "1",
+    "SLURM_NTASKS": "1",
+    "SLURM_MEM_PER_NODE": "102400",
+    "SLURM_SUBMIT_DIR": "/hkfs/home/project/hk-project-p0024638/usjuy/worldbench",
+    "SLURM_CLUSTER_NAME": "hk"
+  },
+  "environment_variables": {
+    "MKL_LIB_DIR": "/software/all/toolkit/Intel_OneAPI/mkl/2025.1/lib/intel64",
+    "CUDA_LIBRARY_DIR": "/software/all/devel/cuda/12.4/lib64",
+    "MKL_BIN_DIR": "/software/all/toolkit/Intel_OneAPI/mkl/2025.1/bin",
+    "MKL_DOC_DIR": "/software/all/toolkit/Intel_OneAPI/mkl/2025.1/documentation",
+    "MKL_HOME": "/software/all/toolkit/Intel_OneAPI/mkl/2025.1",
+    "CUDA_MAN_DIR": "/software/all/devel/cuda/12.4/doc/man",
+    "CUDA_VERSION": "12.4",
+    "MKL_INC_DIR": "/software/all/toolkit/Intel_OneAPI/mkl/2025.1/include",
+    "CUDA_PKGCONFIG_DIR": "/software/all/devel/cuda/12.4/pkgconfig",
+    "CUDA_VISIBLE_DEVICES": "0",
+    "MKL_EXA_DIR": "/software/all/toolkit/Intel_OneAPI/mkl/2025.1/share/doc/mkl/examples",
+    "MKL_PKGCONFIG_DIR": "/software/all/toolkit/Intel_OneAPI/mkl/2025.1/lib/pkgconfig",
+    "CUDA_INCLUDE_DIR": "/software/all/devel/cuda/12.4/include",
+    "CUDA_PATH": "/software/all/devel/cuda/12.4",
+    "CUDA_ROOT": "/software/all/devel/cuda/12.4",
+    "LD_LIBRARY_PATH": "/hkfs/home/project/hk-project-p0024638/usjuy/worldbench/stable-worldmodel/.venv/lib/python3.10/site-packages/cv2/../../lib64:/software/all/devel/cuda/12.4/lib64:/software/all/mpi/openmpi/5.0-intel-2025.1_llvm/lib:/software/all/toolkit/Intel_OneAPI/mkl/2025.1/lib/intel64:/software/all/toolkit/Intel_OneAPI/compiler/2025.1/lib",
+    "CUDA_INC_DIR": "/software/all/devel/cuda/12.4/include",
+    "MKL_VERSION": "2025.1",
+    "CUDA_DOC_DIR": "/software/all/devel/cuda/12.4/doc",
+    "OMP_NUM_THREADS": "1",
+    "CUDA_BIN_DIR": "/software/all/devel/cuda/12.4/bin",
+    "CUDA_HOME": "/software/all/devel/cuda/12.4",
+    "PATH": "/hkfs/home/project/hk-project-p0024638/usjuy/worldbench/stable-worldmodel/.venv/bin:/hkfs/home/project/hk-project-p0024638/usjuy/worldbench/stable-worldmodel/.venv/bin:/software/all/bin:/software/all/devel/cuda/12.4/bin:/software/all/mpi/openmpi/5.0-intel-2025.1_llvm/bin:/software/all/toolkit/Intel_OneAPI/compiler/2025.1/bin:/home/hk-project-p0024638/usjuy/.vscode-server/data/User/globalStorage/github.copilot-chat/debugCommand:/home/hk-project-p0024638/usjuy/.vscode-server/data/User/globalStorage/github.copilot-chat/copilotCli:/hkfs/home/project/hk-project-p0024638/usjuy/.vscode-server/cli/servers/Stable-0958016b2af9f09bb4257e0df4a95e2f90590f9f/server/bin/remote-cli:/software/all/bin:/home/hk-project-p0024638/usjuy/.local/bin:/home/hk-project-p0024638/usjuy/bin:/usr/share/Modules/bin:/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/home/hk-project-p0024638/usjuy/.vscode-server/extensions/ms-python.debugpy-2026.6.0-linux-x64/bundled/scripts/noConfigScripts:.",
+    "CUDA_LIB_DIR": "/software/all/devel/cuda/12.4/lib64",
+    "MKL_NUM_THREADS": "1",
+    "CUDA_DEVICE_ORDER": "PCI_BUS_ID"
+  }
+}
