@@ -343,8 +343,13 @@ class PushT(gym.Env):
         info = self._get_info()
 
         # compute reward and termination
+        
         terminated, distance = self.eval_state(self.goal_state, state)
-        reward = -distance  # the closer the better
+        # reward = -distance  # the closer the better
+
+        # sparse reward
+        reward = terminated
+
 
         # SB3 logs rollout/success_rate from info['is_success'] on terminal steps
         info['is_success'] = bool(terminated)
@@ -361,11 +366,10 @@ class PushT(gym.Env):
         angle_diff = np.minimum(angle_diff, 2 * np.pi - angle_diff)
 
         success = pos_diff < 20 and angle_diff < np.pi / 9
-        state_dist = np.linalg.norm(goal_state - cur_state)
+        # state_dist = np.linalg.norm(goal_state - cur_state)
 
-        # TODO: DEBUGGING PURPOSES pos_diff + distance to block is reward cur_state has (agent x, y, box x, y, angle)
-        agent_to_block = np.linalg.norm(cur_state[0:2] - cur_state[2:4])    # agent → the block
-        return success, pos_diff + agent_to_block + angle_diff
+        # agent_to_block = np.linalg.norm(cur_state[0:2] - cur_state[2:4])    # agent → the block
+        return success, success # pos_diff + agent_to_block + angle_diff
         # return success, state_dist
 
     def render(self):

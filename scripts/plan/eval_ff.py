@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 import hydra
+from hydra.core.hydra_config import HydraConfig
 import numpy as np
 import stable_pretraining as spt
 import torch
@@ -167,7 +168,7 @@ def run(cfg: DictConfig):
     ), 'Planning horizon must be smaller than or equal to eval_budget'
 
     # create world environment
-    cfg.world.max_episode_steps = 2 * cfg.eval.eval_budget
+    cfg.world.max_episode_steps = 4 * cfg.eval.eval_budget
     world = swm.World(
         **cfg.world, image_shape=(224, 224), render_mode='rgb_array'
     )
@@ -233,10 +234,10 @@ def run(cfg: DictConfig):
 
     if policy == 'random' and not wandb_run:
         policy = swm.policy.RandomPolicy()
-        results_path = Path(__file__).parent
+        results_path = Path(HydraConfig.get().runtime.output_dir)
     elif policy == 'noop' and not wandb_run:
         policy = swm.policy.NoOpPolicy()
-        results_path = Path(__file__).parent
+        results_path = Path(HydraConfig.get().runtime.output_dir)
     elif rl_algo and rl_algo in ALGOS:
         # find vecnorm path
         vecnorm_path = get_vecnorm_path(cfg, ckpt_path)
@@ -250,61 +251,75 @@ def run(cfg: DictConfig):
         policy = swm.policy.FeedForwardPolicy(
             model=model, process=process, transform=transform
         )
+    world.set_policy(policy)
 
     print(f"result path: {results_path}")
 
-    # sample the episodes and the starting indices
-    episode_len = get_episodes_length(dataset, ep_indices)
-    max_start_idx = episode_len - cfg.eval.goal_offset_steps - 1
-    max_start_idx_dict = {
-        ep_id: max_start_idx[i] for i, ep_id in enumerate(ep_indices)
-    }
-    # Map each dataset row’s episode_idx to its max_start_idx
-    col_name = (
-        'episode_idx' if 'episode_idx' in dataset.column_names else 'ep_idx'
-    )
-    max_start_per_row = np.array(
-        [max_start_idx_dict[ep_id] for ep_id in dataset.get_col_data(col_name)]
-    )
-
-    # remove all the lines of dataset for which dataset['step_idx'] > max_start_per_row
-    valid_mask = dataset.get_col_data('step_idx') <= max_start_per_row
-    valid_indices = np.nonzero(valid_mask)[0]
-    print(valid_mask.sum(), 'valid starting points found for evaluation.')
-
-    g = np.random.default_rng(cfg.seed)
-    random_episode_indices = g.choice(
-        len(valid_indices) - 1, size=cfg.eval.num_eval, replace=False
-    )
-
-    # sort increasingly to avoid issues with HDF5Dataset indexing
-    random_episode_indices = np.sort(valid_indices[random_episode_indices])
-
-    print(random_episode_indices)
-
-    eval_episodes = dataset.get_row_data(random_episode_indices)[col_name]
-    eval_start_idx = dataset.get_row_data(random_episode_indices)['step_idx']
-
-    if len(eval_episodes) < cfg.eval.num_eval:
-        raise ValueError(
-            'Not enough episodes with sufficient length for evaluation.'
+    if cfg.eval.use_dataset:
+        # sample the episodes and the starting indices
+        episode_len = get_episodes_length(dataset, ep_indices)
+        max_start_idx = episode_len - cfg.eval.goal_offset_steps - 1
+        max_start_idx_dict = {
+            ep_id: max_start_idx[i] for i, ep_id in enumerate(ep_indices)
+        }
+        # Map each dataset row’s episode_idx to its max_start_idx
+        col_name = (
+            'episode_idx' if 'episode_idx' in dataset.column_names else 'ep_idx'
+        )
+        max_start_per_row = np.array(
+            [max_start_idx_dict[ep_id] for ep_id in dataset.get_col_data(col_name)]
         )
 
-    world.set_policy(policy)
+        # remove all the lines of dataset for which dataset['step_idx'] > max_start_per_row
+        valid_mask = dataset.get_col_data('step_idx') <= max_start_per_row
+        valid_indices = np.nonzero(valid_mask)[0]
+        print(valid_mask.sum(), 'valid starting points found for evaluation.')
 
-    start_time = time.time()
-    metrics = world.evaluate(
-        dataset=dataset,
-        start_steps=eval_start_idx.tolist(),
-        goal_offset=cfg.eval.goal_offset_steps,
-        eval_budget=cfg.eval.eval_budget,
-        episodes_idx=eval_episodes.tolist(),
-        callables=OmegaConf.to_container(
-            cfg.eval.get('callables'), resolve=True
-        ),
-        video=results_path,
-    )
-    end_time = time.time()
+        g = np.random.default_rng(cfg.seed)
+        random_episode_indices = g.choice(
+            len(valid_indices) - 1, size=cfg.eval.num_eval, replace=False
+        )
+
+        # sort increasingly to avoid issues with HDF5Dataset indexing
+        random_episode_indices = np.sort(valid_indices[random_episode_indices])
+
+        print(random_episode_indices)
+
+        eval_episodes = dataset.get_row_data(random_episode_indices)[col_name]
+        eval_start_idx = dataset.get_row_data(random_episode_indices)['step_idx']
+
+        if len(eval_episodes) < cfg.eval.num_eval:
+            raise ValueError(
+                'Not enough episodes with sufficient length for evaluation.'
+            )
+
+
+        start_time = time.time()
+        metrics = world.evaluate(
+            dataset=dataset,
+            start_steps=eval_start_idx.tolist(),
+            goal_offset=cfg.eval.goal_offset_steps,
+            eval_budget=cfg.eval.eval_budget,
+            episodes_idx=eval_episodes.tolist(),
+            callables=OmegaConf.to_container(
+                cfg.eval.get('callables'), resolve=True
+            ), # type: ignore
+            video=results_path,
+        )
+        end_time = time.time()
+    else:
+        start_time = time.time()
+        metrics = world.evaluate(
+            # dataset=dataset,
+            episodes=cfg.eval.num_eval,
+            seed=cfg.seed,
+            callables=OmegaConf.to_container(
+                cfg.eval.get('callables'), resolve=True
+            ), # type: ignore
+            video=results_path,
+        )
+        end_time = time.time()
+
 
     print(metrics)
 

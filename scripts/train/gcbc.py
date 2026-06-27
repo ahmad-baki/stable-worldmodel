@@ -44,7 +44,8 @@ def get_data(cfg):
     if use_proprio:
         keys_to_load.append('proprio')
         keys_to_cache.append('proprio')
-
+    
+    num_traj = cfg.get('num_trajectories', None)
     dataset = swm.data.load_dataset(
         cfg.dataset_name,
         num_steps=cfg.n_steps,
@@ -54,7 +55,7 @@ def get_data(cfg):
         keys_to_load=keys_to_load,
         keys_to_cache=keys_to_cache,
         seed=cfg.seed,
-        num_traj=cfg.num_trajectories,
+        num_traj=num_traj,
     )
 
     norm_action_transform = get_column_normalizer(dataset, 'action', 'action')

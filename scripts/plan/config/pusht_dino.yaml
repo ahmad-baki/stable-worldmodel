@@ -34,7 +34,8 @@ plan_config:
   action_block: 5 # frameskip
 
 # evaluation from dataset (replay expert trajectories)
-eval:
+eval:  
+  use_dataset: false 
   num_eval: 50
   goal_offset_steps: 25
   eval_budget: 50

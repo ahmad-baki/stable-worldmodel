@@ -35,6 +35,8 @@ plan_config:
 
 # evaluation from dataset (replay expert trajectories)
 eval:
+  # if true sample start states from dataset, else random sample
+  use_dataset: false 
   num_eval: 50
   goal_offset_steps: 25
   eval_budget: 50
