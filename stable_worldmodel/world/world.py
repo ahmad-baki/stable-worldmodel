@@ -35,6 +35,7 @@ Quick start::
 
 from __future__ import annotations
 
+import shutil
 from collections import defaultdict
 from collections.abc import Callable
 from copy import deepcopy
@@ -524,7 +525,11 @@ class World:
             float(results['episode_successes'].sum()) / n * 100.0
         )
         if frames:
-            Path(video).mkdir(parents=True, exist_ok=True)
+            video_path = Path(video)
+            if video_path.exists():
+                print(f"Removing existing eval folder: {video_path}")
+                shutil.rmtree(video_path)
+            video_path.mkdir(parents=True, exist_ok=True)
             for env_idx, f in frames.items():
                 outcome = (
                     'success'

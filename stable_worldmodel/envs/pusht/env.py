@@ -62,12 +62,12 @@ class PushT(gym.Env):
                     dtype=np.float64,
                 ),
                 'state': spaces.Box(
-                    low=np.array([0, 0, 0, 0, -np.pi * 2, -ws, -ws]),
+                    low=np.array([0, 0, 0, 0, 0, -ws, -ws]),
                     high=np.array([ws, ws, ws, ws, np.pi * 2, ws, ws]),
                     dtype=np.float64,
                 ),
                 'desired_goal': spaces.Box(
-                    low=np.array([0, 0, 0, 0, -np.pi * 2]),
+                    low=np.array([0, 0, 0, 0, 0]),
                     high=np.array([ws, ws, ws, ws, np.pi * 2]),
                     dtype=np.float64,
                 )
@@ -103,7 +103,7 @@ class PushT(gym.Env):
                             len(self.shapes), start=0, init_value=0
                         ),
                         'angle': swm_spaces.Box(
-                            low=-2 * np.pi,
+                            low=0,
                             high=2 * np.pi,
                             init_value=0.0,
                             shape=(),
@@ -144,7 +144,7 @@ class PushT(gym.Env):
                             len(self.shapes) - 1, start=1, init_value=2
                         ),
                         'angle': swm_spaces.Box(
-                            low=-2 * np.pi,
+                            low=0,
                             high=2 * np.pi,
                             init_value=0.0,
                             shape=(),
@@ -174,7 +174,7 @@ class PushT(gym.Env):
                             dtype=np.float32,
                         ),
                         'angle': swm_spaces.Box(
-                            low=-2 * np.pi,
+                            low=0,
                             high=2 * np.pi,
                             init_value=np.pi / 4,
                             shape=(),
@@ -362,6 +362,12 @@ class PushT(gym.Env):
         pos_diff = np.linalg.norm(goal_state[2:4] - cur_state[2:4])
 
         # curr_state = {agent x, y, block x, y, angle, agent delt_x, delt_y}
+        # Wrap the raw difference into [0, 2*pi) before taking the circular
+        # minimum. The goal angle is sampled in [-2*pi, 2*pi] and stored
+        # unwrapped, while cur_state[4] is wrapped to [0, 2*pi) in _get_obs, so
+        # |goal - cur| can exceed 2*pi. Without the modulo, 2*pi - angle_diff
+        # goes negative and np.minimum returns it, making angle_diff < pi/9
+        # always true and marking wrongly-oriented blocks as success.
         angle_diff = np.abs(goal_state[4] - cur_state[4])
         angle_diff = np.minimum(angle_diff, 2 * np.pi - angle_diff)
 

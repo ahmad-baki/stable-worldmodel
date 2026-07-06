@@ -28,6 +28,12 @@ register(
 )
 
 register(
+    id='swm/PushT-Pixels-v1',
+    entry_point='stable_worldmodel.envs.pusht.env_pixels:PushTPixels',
+    max_episode_steps=300,
+)
+
+register(
     id='swm/SimplePointMaze-v0',
     entry_point='stable_worldmodel.envs.simple_point_maze:SimplePointMazeEnv',
 )
@@ -216,5 +222,4 @@ try:
     from stable_worldmodel.envs import ale  # noqa: F401
 except ImportError:
     pass
-
 

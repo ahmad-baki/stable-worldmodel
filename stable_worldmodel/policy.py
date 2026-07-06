@@ -283,6 +283,8 @@ class FeedForwardPolicy(BasePolicy):
         process: dict[str, Transformable] | None = None,
         transform: dict[str, Callable[[torch.Tensor], torch.Tensor]]
         | None = None,
+        history_len: int | None = None,
+        history_keys: tuple[str, ...] = ('pixels', 'proprio'),
         **kwargs: Any,
     ) -> None:
         """Initialize the feed-forward policy.
@@ -291,6 +293,12 @@ class FeedForwardPolicy(BasePolicy):
             model: Neural network model with a `get_action` method.
             process: Dictionary of data preprocessors for specific keys.
             transform: Dictionary of tensor transformations (e.g., image transforms).
+            history_len: Number of past observations to stack along the time
+                axis before the forward pass. Defaults to the model's own
+                ``history_size`` attribute (``1`` disables stacking, matching a
+                stateless single-frame policy).
+            history_keys: Observation keys to accumulate into the temporal
+                window (goal keys are intentionally excluded).
             **kwargs: Additional configuration parameters.
         """
         super().__init__(**kwargs)
@@ -298,49 +306,168 @@ class FeedForwardPolicy(BasePolicy):
         self.model = model.eval()
         self.process = process or {}
         self.transform = transform or {}
+        # GCBC-style models are trained on a fixed-length observation history
+        # (``history_size``), but the env only ever emits the current frame
+        # (T=1). Keep a per-env rolling buffer and stack the last
+        # ``history_len`` observations so the model runs in the regime it was
+        # trained on. ``history_len == 1`` preserves the old single-frame
+        # behavior for stateless models.
+        if history_len is None:
+            history_len = int(getattr(model, 'history_size', 1) or 1)
+        self.history_len = max(1, int(history_len))
+        self.history_keys = tuple(history_keys)
+        self._hist: dict[str, list[deque]] = {}
+        # Per-env buffer of pending sub-actions. Models trained with action
+        # chunking (frameskip>1) output ``chunk_size * action_dim`` values; we
+        # split each chunk into ``chunk_size`` env-steps and only re-query the
+        # model when an env's buffer drains. Replanning every ``chunk_size``
+        # steps also spaces the stacked history frames ``chunk_size`` steps
+        # apart — matching the frameskip-subsampled window the model saw in
+        # training. chunk_size == 1 reproduces the old replan-every-step policy.
+        self._action_buffer: list[deque] | None = None
+        self._action_dim: int | None = None
+
+    def set_env(self, env: Any) -> None:
+        """Attach the env and (re)initialize per-env action/history buffers."""
+        super().set_env(env)
+        n = getattr(env, 'num_envs', 1)
+        self._action_buffer = [deque() for _ in range(n)]
+        self._hist = {}
+        space = getattr(env, 'single_action_space', None)
+        if space is None:
+            space = getattr(env, 'action_space', None)
+        self._action_dim = (
+            int(np.asarray(space.shape)[-1]) if space is not None else None
+        )
 
     def get_action(self, info_dict: dict, **kwargs: Any) -> np.ndarray:
-        """Get action via a forward pass through the neural network model.
+        """Get an action, unrolling chunked model outputs across env steps.
+
+        The model returns ``chunk_size * action_dim`` values per env
+        (``chunk_size == 1`` for non-chunked models). Each chunk is split into
+        ``chunk_size`` sub-actions, buffered per env, and emitted one per step;
+        the model is only re-queried when an env's buffer empties (or the env
+        just reset), which keeps the stacked history frames ``chunk_size`` steps
+        apart to match the frameskip window seen in training.
 
         Args:
-            info_dict: Current state information containing at minimum a 'goal' key.
-            **kwargs: Additional parameters (unused).
+            info_dict: Current state info; must contain 'goal'. ``_needs_flush``
+                (per-env reset flags) is consumed if present.
 
         Returns:
-            The selected action as a numpy array.
-
-        Raises:
-            AssertionError: If environment not set or 'goal' not in info_dict.
+            One action per env, shape ``(num_envs, action_dim)``.
         """
         assert hasattr(self, 'env'), 'Environment not set for the policy'
         assert 'goal' in info_dict, "'goal' must be provided in info_dict"
 
-        # Prepare the info dict (transforms and normalizes inputs)
-        info_dict = self._prepare_info(info_dict)
+        needs_flush = info_dict.pop('_needs_flush', None)
+        n = getattr(self.env, 'num_envs', 1)
+        if self._action_buffer is None or len(self._action_buffer) != n:
+            self._action_buffer = [deque() for _ in range(n)]
+            self._hist = {}
 
-        # Add goal_pixels key for GCBC model
-        if 'goal' in info_dict:
-            info_dict['goal_pixels'] = info_dict['goal']
+        # A reset env abandons its remaining chunk (its history is re-primed on
+        # the next replan below).
+        if needs_flush is not None:
+            for i in range(n):
+                if bool(needs_flush[i]):
+                    self._action_buffer[i].clear()
 
-        # Move all tensors to the model's device
+        replan_idx = [i for i in range(n) if len(self._action_buffer[i]) == 0]
+        if replan_idx:
+            self._replan(info_dict, replan_idx, needs_flush)
+
+        # Emit one buffered sub-action per env this step.
+        return np.stack([self._action_buffer[i].popleft() for i in range(n)])
+
+    def _replan(
+        self,
+        info_dict: dict,
+        replan_idx: list[int],
+        needs_flush: np.ndarray | None,
+    ) -> None:
+        """Query the model for the envs in ``replan_idx`` and refill their
+        action buffers with the un-normalized chunk of sub-actions."""
+        info = self._history_info(info_dict, replan_idx, needs_flush)
+        info = self._prepare_info(info)
+        if 'goal' in info:
+            info['goal_pixels'] = info['goal']
         device = next(self.model.parameters()).device
-        for k, v in info_dict.items():
+        for k, v in info.items():
             if torch.is_tensor(v):
-                info_dict[k] = v.to(device)
+                info[k] = v.to(device)
 
-        # Get action from model
         with torch.no_grad():
-            action = self.model.get_action(info_dict)
+            out = self.model.get_action(info)
+        if torch.is_tensor(out):
+            out = out.cpu().detach().numpy()
+        out = np.asarray(out)  # (m, chunk_size * action_dim)
 
-        # Convert to numpy
-        if torch.is_tensor(action):
-            action = action.cpu().detach().numpy()
-
-        # post-process action
+        m = out.shape[0]
+        adim = self._action_dim or out.shape[-1]
+        chunk_size = max(1, out.shape[-1] // adim)
+        # Un-normalize in action_dim-sized blocks, then split into sub-actions.
+        flat = out.reshape(m * chunk_size, adim)
         if 'action' in self.process:
-            action = self.process['action'].inverse_transform(action)
+            flat = self.process['action'].inverse_transform(flat)
+        chunk = np.asarray(flat).reshape(m, chunk_size, adim)
 
-        return action
+        for row, i in enumerate(replan_idx):
+            for a in chunk[row]:
+                self._action_buffer[i].append(np.asarray(a))
+
+    def _history_info(
+        self,
+        info_dict: dict,
+        replan_idx: list[int],
+        needs_flush: np.ndarray | None,
+    ) -> dict:
+        """Slice ``info_dict`` to ``replan_idx`` and replace history keys with
+        their stacked ``(len(replan_idx), history_len, ...)`` windows.
+
+        History is appended only for the replanning envs, so an env mid-chunk
+        keeps its window untouched; because replans occur every ``chunk_size``
+        steps, its frames stay ``chunk_size`` steps apart. On the first step of
+        an episode (empty buffer or ``needs_flush[i]``) the window is primed by
+        repeating the current frame.
+        """
+        n = getattr(self.env, 'num_envs', 1)
+        out: dict = {}
+        for k, v in info_dict.items():
+            if k in self.history_keys:
+                continue
+            if isinstance(v, np.ndarray):
+                out[k] = v[replan_idx]
+            elif torch.is_tensor(v):
+                out[k] = v[torch.as_tensor(replan_idx)]
+            elif isinstance(v, list):
+                out[k] = [v[i] for i in replan_idx]
+            else:
+                out[k] = v
+
+        for key in self.history_keys:
+            if key not in info_dict:
+                continue
+            v = np.asarray(info_dict[key])
+            # drop the env-provided singleton time dim: (n, 1, ...) -> (n, ...)
+            cur = v[:, 0] if v.ndim >= 2 and v.shape[1] == 1 else v
+            buffers = self._hist.get(key)
+            if buffers is None or len(buffers) != n:
+                buffers = [deque(maxlen=self.history_len) for _ in range(n)]
+                self._hist[key] = buffers
+            frames = []
+            for i in replan_idx:
+                buf = buffers[i]
+                if needs_flush is not None and bool(needs_flush[i]):
+                    buf.clear()
+                if len(buf) == 0:
+                    for _ in range(self.history_len):
+                        buf.append(cur[i])
+                else:
+                    buf.append(cur[i])
+                frames.append(np.stack(list(buf), axis=0))  # (T, ...)
+            out[key] = np.stack(frames, axis=0)  # (m, T, ...)
+        return out
 
 
 class WorldModelPolicy(BasePolicy):

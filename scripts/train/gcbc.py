@@ -20,34 +20,52 @@ import stable_worldmodel as swm
 # ============================================================================
 # Data Setup
 # ============================================================================
-def get_data(cfg):
-    """Setup dataset with image transforms and normalization."""
+def get_img_pipeline(key, target, img_size=224):
+    return spt.data.transforms.Compose(
+        spt.data.transforms.ToImage(
+            **spt.data.dataset_stats.ImageNet,
+            source=key,
+            target=target,
+        ),
+        spt.data.transforms.Resize(img_size, source=key, target=target),
+    )
 
-    def get_img_pipeline(key, target, img_size=224):
-        return spt.data.transforms.Compose(
-            spt.data.transforms.ToImage(
-                **spt.data.dataset_stats.ImageNet,
-                source=key,
-                target=target,
-            ),
-            spt.data.transforms.Resize(img_size, source=key, target=target),
-        )
+
+def get_data(cfg):
+    """Setup dataset with image transforms and normalization.
+
+    When ``cfg.cache_embeddings`` is true, the frozen-encoder patch embeddings
+    are loaded from ``cfg.embed_dataset_name`` (precomputed once by
+    ``scripts/train/precompute_dino_embed.py``) under the ``pixels_embed``
+    column instead of raw ``pixels``, and the image pipeline is skipped. This
+    is transparent to the rest of training: the model's ``encode`` detects the
+    precomputed embeddings and skips the encoder forward.
+    """
+
+    use_cache = cfg.get('cache_embeddings', False)
+    pixels_key = 'pixels_embed' if use_cache else 'pixels'
+    dataset_name = (
+        cfg.get('embed_dataset_name') if use_cache else cfg.dataset_name
+    )
+    if use_cache:
+        assert dataset_name, 'cache_embeddings=true requires embed_dataset_name'
 
     cache_dir = os.environ.get('LOCAL_DATASET_DIR', None)
     print(
-        f'Loading dataset "{cfg.dataset_name}" from {"local cache: " + cache_dir if cache_dir else "default location"}'
+        f'Loading dataset "{dataset_name}" (cache_embeddings={use_cache}) '
+        f'from {"local cache: " + cache_dir if cache_dir else "default location"}'
     )
 
     use_proprio = cfg.dinowm.get('use_proprio_encoder', True)
-    keys_to_load = ['pixels', 'action']
+    keys_to_load = [pixels_key, 'action']
     keys_to_cache = ['action']
     if use_proprio:
         keys_to_load.append('proprio')
         keys_to_cache.append('proprio')
-    
+
     num_traj = cfg.get('num_trajectories', None)
     dataset = swm.data.load_dataset(
-        cfg.dataset_name,
+        dataset_name,
         num_steps=cfg.n_steps,
         frameskip=cfg.frameskip,
         transform=None,
@@ -59,11 +77,12 @@ def get_data(cfg):
     )
 
     norm_action_transform = get_column_normalizer(dataset, 'action', 'action')
-    transforms = [
-        get_img_pipeline('pixels', 'pixels', cfg.image_size),
-        norm_action_transform,
-    ]
-    goal_keys = {'pixels': 'goal_pixels'}
+    transforms = [norm_action_transform]
+    if not use_cache:
+        transforms.insert(
+            0, get_img_pipeline('pixels', 'pixels', cfg.image_size)
+        )
+    goal_keys = {pixels_key: f'goal_{pixels_key}'}
     if use_proprio:
         norm_proprio_transform = get_column_normalizer(
             dataset, 'proprio', 'proprio'
@@ -110,7 +129,7 @@ def get_data(cfg):
         num_workers=cfg.num_workers,
         drop_last=True,
         persistent_workers=True,
-        prefetch_factor=2,
+        prefetch_factor=cfg.get('prefetch_factor', 2),
         pin_memory=True,
         shuffle=True,
         generator=rnd_gen,
@@ -141,18 +160,21 @@ def get_gcbc_policy(cfg):
             batch[proprio_key] = torch.nan_to_num(batch[proprio_key], 0.0)
         batch['action'] = torch.nan_to_num(batch['action'], 0.0)
 
-        # Encode all timesteps into latent embeddings
+        # Encode all timesteps into latent embeddings. With cached embeddings
+        # the pixel columns already hold frozen-encoder features; `encode`
+        # detects this and skips the encoder forward.
+        px_key = 'pixels_embed' if cfg.get('cache_embeddings', False) else 'pixels'
         batch = self.model.encode(
             batch,
             target='embed',
-            pixels_key='pixels',
+            pixels_key=px_key,
         )
 
         # Encode goal into latent embedding
         batch = self.model.encode(
             batch,
             target='goal_embed',
-            pixels_key='goal_pixels',
+            pixels_key=f'goal_{px_key}',
             prefix='goal_',
         )
 

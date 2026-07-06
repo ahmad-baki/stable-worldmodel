@@ -257,18 +257,28 @@ def run(cfg: DictConfig):
     print(f"result path: {results_path}")
 
     if cfg.eval.use_dataset:
-        # sample the episodes and the starting indices
+        # sample starts whose remaining expert horizon is at most capped by
+        # max_goal_offset_steps. Starts near the end of an episode therefore
+        # evaluate against the final available dataset state instead of being
+        # discarded.
         episode_len = get_episodes_length(dataset, ep_indices)
-        max_start_idx = episode_len - cfg.eval.goal_offset_steps - 1
+        max_goal_offset_steps = cfg.eval.get(
+            'max_goal_offset_steps', cfg.eval.goal_offset_steps
+        )
+        max_start_idx = episode_len - 2
         max_start_idx_dict = {
             ep_id: max_start_idx[i] for i, ep_id in enumerate(ep_indices)
+        }
+        episode_len_dict = {
+            ep_id: episode_len[i] for i, ep_id in enumerate(ep_indices)
         }
         # Map each dataset row’s episode_idx to its max_start_idx
         col_name = (
             'episode_idx' if 'episode_idx' in dataset.column_names else 'ep_idx'
         )
+        row_episode_idx = dataset.get_col_data(col_name)
         max_start_per_row = np.array(
-            [max_start_idx_dict[ep_id] for ep_id in dataset.get_col_data(col_name)]
+            [max_start_idx_dict[ep_id] for ep_id in row_episode_idx]
         )
 
         # remove all the lines of dataset for which dataset['step_idx'] > max_start_per_row
@@ -276,9 +286,14 @@ def run(cfg: DictConfig):
         valid_indices = np.nonzero(valid_mask)[0]
         print(valid_mask.sum(), 'valid starting points found for evaluation.')
 
+        if len(valid_indices) < cfg.eval.num_eval:
+            raise ValueError(
+                'Not enough episodes with sufficient length for evaluation.'
+            )
+
         g = np.random.default_rng(cfg.seed)
         random_episode_indices = g.choice(
-            len(valid_indices) - 1, size=cfg.eval.num_eval, replace=False
+            len(valid_indices), size=cfg.eval.num_eval, replace=False
         )
 
         # sort increasingly to avoid issues with HDF5Dataset indexing
@@ -288,18 +303,21 @@ def run(cfg: DictConfig):
 
         eval_episodes = dataset.get_row_data(random_episode_indices)[col_name]
         eval_start_idx = dataset.get_row_data(random_episode_indices)['step_idx']
-
-        if len(eval_episodes) < cfg.eval.num_eval:
-            raise ValueError(
-                'Not enough episodes with sufficient length for evaluation.'
-            )
-
+        eval_goal_offsets = np.array(
+            [
+                min(
+                    max_goal_offset_steps,
+                    episode_len_dict[ep_id] - start_idx - 1,
+                )
+                for ep_id, start_idx in zip(eval_episodes, eval_start_idx)
+            ]
+        )
 
         start_time = time.time()
         metrics = world.evaluate(
             dataset=dataset,
             start_steps=eval_start_idx.tolist(),
-            goal_offset=cfg.eval.goal_offset_steps,
+            goal_offset=eval_goal_offsets,
             eval_budget=cfg.eval.eval_budget,
             episodes_idx=eval_episodes.tolist(),
             callables=OmegaConf.to_container(
@@ -307,6 +325,7 @@ def run(cfg: DictConfig):
             ), # type: ignore
             video=results_path,
         )
+        metrics['goal_offsets'] = eval_goal_offsets
         end_time = time.time()
     else:
         start_time = time.time()

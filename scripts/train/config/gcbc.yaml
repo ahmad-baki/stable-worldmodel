@@ -7,7 +7,15 @@ defaults:
 
 output_model_name: dinogcbc
 dataset_name: pusht_expert_train.h5
-# num_trajectories: 10
+num_trajectories: null
+
+# Frozen-encoder embedding cache. Precompute once with
+# scripts/train/precompute_dino_embed.py, then set cache_embeddings=true and
+# point embed_dataset_name at the resulting *_dinoembed.h5 to skip the DINO
+# forward each epoch. Defaults keep the standard raw-pixel path unchanged.
+cache_embeddings: false
+embed_dataset_name: null
+prefetch_factor: 2
 
 trainer:
   max_epochs: 100

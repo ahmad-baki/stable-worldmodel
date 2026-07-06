@@ -39,6 +39,7 @@ eval:
   use_dataset: false 
   num_eval: 50
   goal_offset_steps: 25
+  max_goal_offset_steps: 25
   eval_budget: 50
   img_size: 224
   dataset_name: pusht_expert_train.h5
@@ -59,3 +60,4 @@ bf16: false
 
 output:
   filename: pusht_results.txt
+6
