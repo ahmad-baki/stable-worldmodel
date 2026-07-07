@@ -229,6 +229,5 @@ old_tests/
 results/
 local_scripts/
 CLAUDE.md
-uv.lock
 scripts/train/config/launcher/local.yaml
 scripts/train/config/launcher/local.yaml

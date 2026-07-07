@@ -60,4 +60,3 @@ bf16: false
 
 output:
   filename: pusht_results.txt
-6
