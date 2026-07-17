@@ -4,6 +4,9 @@ defaults:
   - launcher: local_bc
   - _self_
 
+hydra:
+  job:
+    chdir: true
 
 output_model_name: dinogcbc
 dataset_name: pusht_expert_train.h5
@@ -16,6 +19,8 @@ num_trajectories: null
 cache_embeddings: false
 embed_dataset_name: null
 prefetch_factor: 2
+in_order: false
+val_num_workers: 4
 
 trainer:
   max_epochs: 100
@@ -52,6 +57,7 @@ predictor:
   dim_head: 64
   dropout: 0.0
   emb_dropout: 0.0
+  pool_type: attention
 
 # Encoder configuration
 # Options: 'dino' (pretrained frozen DINO) or 'vit_tiny' (trainable ViT tiny from scratch)

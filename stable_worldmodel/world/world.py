@@ -174,6 +174,7 @@ class World:
         goal_offset: int | None = None,
         eval_budget: int | None = None,
         callables: list[dict] | None = None,
+        random_goal: bool = False,
     ) -> dict:
         """Run the attached policy and return aggregated metrics.
 
@@ -228,7 +229,7 @@ class World:
                 mode,
             )
         mode = reset_mode or 'auto'
-        return self._evaluate(episodes, seed, options, video, mode)
+        return self._evaluate(episodes, seed, options, video, mode, random_goal)
 
     def collect(
         self,
@@ -400,7 +401,7 @@ class World:
                     for rank, i in enumerate(np.where(done)[0]):
                         seeds[i] = next_seed + base + rank
                 _, self.infos = self.envs.reset(
-                    seed=seeds, options=options, mask=done
+                    seed=seeds, options=options, mask=done, random_goal=random_goal
                 )
                 self.terminateds[done] = False
                 self.truncateds[done] = False
@@ -413,7 +414,7 @@ class World:
     def _get_actions(self) -> np.ndarray:
         return self.policy.get_action(self.infos)
 
-    def _evaluate(self, episodes, seed, options, video, mode) -> dict:
+    def _evaluate(self, episodes, seed, options, video, mode, random_goal) -> dict:
         results = {
             'success_rate': 0.0,
             'episode_successes': np.zeros(episodes),
@@ -449,6 +450,7 @@ class World:
             mode=mode,
             on_step=on_step,
             on_done=on_done,
+            random_goal=random_goal,
         )
 
         results['success_rate'] = (

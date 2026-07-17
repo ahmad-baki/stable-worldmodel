@@ -261,13 +261,36 @@ class Transformer(nn.Module):
         pool_type='attention',
     ):
         super().__init__()
-        assert pool_type in ('attention', 'mean'), (
-            f"pool_type must be 'attention' or 'mean', got '{pool_type}'"
+        assert pool_type in ('attention', 'attention_firstlayer', 'mean'), (
+            f"pool_type must be 'attention', 'attention_firstlayer', or 'mean', got '{pool_type}'"
         )
         self.pool_type = pool_type
         self.num_patches = num_patches
         self.norm = nn.LayerNorm(dim)
         self.layers = nn.ModuleList([])
+        self.aggregation_layers = nn.ModuleList([])
+        if pool_type == 'attention_firstlayer':
+            # First layer is frame aggregation, then alternate self/cross
+            self.aggregation_layers.append(
+                nn.ModuleList(
+                    [
+                        Attention(
+                            dim,
+                            heads=heads,
+                            dim_head=dim_head,
+                            dropout=dropout,
+                            num_patches=num_patches,
+                            num_frames=num_frames,
+                            att_type='frame_agg',
+                            causal=causal,
+                        ),
+                        FeedForward(dim, mlp_dim, dropout=dropout),
+                    ]
+                )
+            )
+            depth -= 1  # reduce depth for remaining layers
+            num_patches = 1  # after frame aggregation, treat as single patch per frame
+
         for i in range(depth):
             if i == depth - 1 and pool_type == 'attention':
                 att_type = 'frame_agg'
@@ -301,6 +324,12 @@ class Transformer(nn.Module):
         Returns:
             out: (B, T, dim) - one embedding per frame
         """
+
+        for i, (attn, ff) in enumerate(self.aggregation_layers):
+            # first layer is frame aggregation (no residual)
+            x = attn(x)
+            x = ff(x)
+
         for i, (attn, ff) in enumerate(self.layers):
             if (
                 i == len(self.layers) - 1 and self.pool_type == 'attention'

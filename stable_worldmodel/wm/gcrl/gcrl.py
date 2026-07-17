@@ -64,8 +64,16 @@ class GCRL(torch.nn.Module):
         emb_keys = emb_keys or self.extra_encoders.keys()
         prefix = prefix or ''
 
-        encode_fn = self._encode_video if is_video else self._encode_image
-        pixels_embed = encode_fn(info[pixels_key].float())  # (B, T, 3, H, W)
+        # With cache_embeddings, pixels_key already holds frozen-encoder patch
+        # features (B, T, P, D) — 4-D vs. raw pixels (B, T, C, H, W) 5-D (goals
+        # are (B, 1, ...) in both cases). Detect and skip the encoder forward,
+        # using the precomputed embeddings directly.
+        raw = info[pixels_key]
+        if raw.dim() == 4:
+            pixels_embed = raw.float()  # precomputed (B, T, P, D)
+        else:
+            encode_fn = self._encode_video if is_video else self._encode_image
+            pixels_embed = encode_fn(raw.float())  # (B, T, 3, H, W)
 
         # == improve the embedding
         n_patches = pixels_embed.shape[2]

@@ -46,21 +46,34 @@ def lejepa_forward(self, batch, stage, cfg):
     emb = output['emb']  # (B, T, D)
     act_emb = output['act_emb']
 
-    ctx_emb = emb[:, :ctx_len]
+    ctx_emb = emb[:, :ctx_len]      # (B, ctx_len, D)
     ctx_act = act_emb[:, :ctx_len]
 
     tgt_emb = emb[:, n_preds:]  # label
-    pred_emb = self.model.predict(ctx_emb, ctx_act)  # pred
+    pred_emb = self.model.predict(ctx_emb, ctx_act)  # pred (B, n_preds, D)
 
     # LeWM loss
     output['pred_loss'] = (pred_emb - tgt_emb).pow(2).mean()
     output['sigreg_loss'] = self.sigreg(emb.transpose(0, 1))
     output['loss'] = output['pred_loss'] + lambd * output['sigreg_loss']
 
-    losses_dict = {
+    log_dict = {
         f'{stage}/{k}': v.detach() for k, v in output.items() if 'loss' in k
     }
-    self.log_dict(losses_dict, on_step=True, sync_dist=True)
+
+    # mean_emb = ctx_emb.view(-1, ctx_emb.size(-1)).mean(dim=0)
+    std_emb = ctx_emb.view(-1, ctx_emb.size(-1)).std(dim=0)         # (B * ctx_len, D) -> (D,)
+    # mean_pred = pred_emb.view(-1, pred_emb.size(-1)).mean(dim=0)
+    std_pred = pred_emb.view(-1, pred_emb.size(-1)).std(dim=0)      # (B * n_preds, D) -> (D,)
+
+    std_emb_mean = std_emb.mean(dim=0)
+    std_pred_mean = std_pred.mean(dim=0)
+    log_dict.update({
+        f'{stage}/std_emb_mean': std_emb_mean,
+        f'{stage}/std_pred_mean': std_pred_mean
+    })
+
+    self.log_dict(log_dict, on_step=True, sync_dist=True)
     return output
 
 

@@ -239,7 +239,7 @@ class PushT(gym.Env):
         self.coverage_arr = []
         self.env_name = 'PushT'
 
-    def reset(self, seed=None, options=None):
+    def reset(self, seed=None, options=None, random_goal=False):
         super().reset(seed=seed, options=options)
 
         self.rng = np.random.default_rng(seed)
@@ -263,6 +263,15 @@ class PushT(gym.Env):
         ### get the state
         if options is not None and 'goal_state' in options:
             goal_state = options['goal_state']
+        elif not random_goal:
+            goal_state = np.concatenate([
+                self.variation_space['agent']['start_position'].value,
+                self.variation_space['goal']['position'].init_value,
+                [self.variation_space['goal']['angle'].init_value],
+                self.variation_space['agent']['velocity'].value,
+            ])
+
+            assert goal_state.shape == (7,)
         else:
             goal_state = np.concatenate(
                 [

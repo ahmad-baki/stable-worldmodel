@@ -17,6 +17,11 @@ from transformers import AutoModel
 import stable_worldmodel as swm
 
 
+# Enable TensorFloat-32 for any float32 matrix multiplies that remain outside
+# bf16 autocast. This is the fast path on A100/H100 Tensor Cores.
+torch.set_float32_matmul_precision('high')
+
+
 # ============================================================================
 # Data Setup
 # ============================================================================
@@ -24,6 +29,7 @@ def get_img_pipeline(key, target, img_size=224):
     return spt.data.transforms.Compose(
         spt.data.transforms.ToImage(
             **spt.data.dataset_stats.ImageNet,
+            dtype=torch.bfloat16,
             source=key,
             target=target,
         ),
@@ -123,23 +129,39 @@ def get_data(cfg):
 
     logging.info(f'Train: {len(train_set)}, Val: {len(val_set)}')
 
-    train = DataLoader(
-        train_set,
+    train_loader_kwargs = dict(
         batch_size=cfg.batch_size,
         num_workers=cfg.num_workers,
         drop_last=True,
-        persistent_workers=True,
-        prefetch_factor=cfg.get('prefetch_factor', 2),
         pin_memory=True,
         shuffle=True,
         generator=rnd_gen,
     )
-    val = DataLoader(
-        val_set,
+    # persistent_workers / prefetch_factor are only valid with worker
+    # processes; passing them when num_workers=0 raises ValueError, so guard
+    # them here. (The lance format is fork-unsafe; its reader switches
+    # multiprocessing to forkserver so num_workers>0 works.)
+    if cfg.num_workers > 0:
+        train_loader_kwargs['persistent_workers'] = True
+        train_loader_kwargs['prefetch_factor'] = cfg.get('prefetch_factor', 2)
+        train_loader_kwargs['in_order'] = cfg.get('in_order', True)
+    train = DataLoader(train_set, **train_loader_kwargs)
+
+    # The persistent training workers are alive during validation. Spawning a
+    # second full-size worker pool here doubled both process count and memory
+    # during the sanity check, so keep validation deliberately smaller.
+    val_num_workers = min(
+        cfg.num_workers, cfg.get('val_num_workers', cfg.num_workers)
+    )
+    val_loader_kwargs = dict(
         batch_size=cfg.batch_size,
-        num_workers=cfg.num_workers,
+        num_workers=val_num_workers,
         pin_memory=True,
     )
+    if val_num_workers > 0:
+        val_loader_kwargs['prefetch_factor'] = cfg.get('prefetch_factor', 2)
+        val_loader_kwargs['in_order'] = cfg.get('in_order', True)
+    val = DataLoader(val_set, **val_loader_kwargs)
 
     return spt.data.DataModule(train=train, val=val)
 

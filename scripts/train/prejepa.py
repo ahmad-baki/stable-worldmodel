@@ -129,8 +129,8 @@ def dinowm_forward(self, batch, stage, cfg):
         is_video=cfg.backbone.get('is_video_encoder', False),
     )
 
-    embedding = batch['emb'][:, : cfg.wm.history_size, ...]
-    pred_embedding = self.model.predict(embedding)
+    embedding = batch['emb'][:, : cfg.wm.history_size, ...]  # (B, T, P, D)
+    pred_embedding = self.model.predict(embedding)  # (B, T, P, D)
     target_embedding = batch['emb'][:, cfg.wm.num_preds :, ...].detach()
 
     # Per-modality losses
@@ -170,8 +170,23 @@ def dinowm_forward(self, batch, stage, cfg):
     if batch['loss'].isnan():
         raise ValueError('NaN loss encountered!')
 
+    log_dict = {
+        f'{stage}/{k}': v.detach()
+        for k, v in batch.items()
+        if '_loss' in k
+    }
+
+    # Collapse diagnostic for predicted visual embeddings only. Proprioception
+    # and action dimensions are excluded from this statistic.
+    with torch.no_grad():
+        visual_pred = pred_embedding[..., :pixels_dim].detach().reshape(
+            -1, pixels_dim
+        )
+        visual_pred_std = visual_pred.std(dim=0, unbiased=False).mean()
+
+    log_dict[f'{stage}/std_visual_pred_mean'] = visual_pred_std
     self.log_dict(
-        {f'{stage}/{k}': v.detach() for k, v in batch.items() if '_loss' in k},
+        log_dict,
         on_step=True,
         sync_dist=True,
     )

@@ -318,6 +318,7 @@ def run(cfg: DictConfig):
                 cfg.eval.get('callables'), resolve=True
             ), # type: ignore
             video=results_path,
+            random_goal=cfg.eval.get('random_goal', False),
         )
         end_time = time.time()
 
