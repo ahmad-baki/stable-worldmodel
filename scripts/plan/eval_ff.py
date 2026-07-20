@@ -33,7 +33,7 @@ from stable_baselines3 import A2C, DDPG, DQN, PPO, SAC, TD3
 ALGOS = {'a2c': A2C, 'ddpg': DDPG, 'dqn': DQN, 'ppo': PPO, 'sac': SAC, 'td3': TD3}
 
 class SB3Policy(swm.policy.BasePolicy):
-    def __init__(self, algo, ckpt_path, vecnorm_path=None, **kw):
+    def __init__(self, algo, ckpt_path, vecnorm_path=None, encoder=None, process=None, **kw):
         super().__init__(**kw)
         self.type = algo
         self.model = ALGOS[algo].load(ckpt_path, device='cpu')
@@ -45,18 +45,65 @@ class SB3Policy(swm.policy.BasePolicy):
             self.vecnorm.training = False
         else:
             self.vecnorm = None
+        # imag-rl policies are trained on world-model dino patch-token embeddings
+        # (not the raw sim state) and output zscore-normalized, frameskip-bundled
+        # actions (chunk_size * action_dim per step). When `encoder` is set, each
+        # real frame is encoded to patch tokens for the obs, and `process['action']`
+        # un-normalizes the first action back to real env units. The rest of the
+        # predicted action chunk is discarded and the model is queried again on
+        # every environment step.
+        # simrl (trained on real-sim obs/actions) passes encoder=None, process=None.
+        self.encoder = encoder
+        self.process = process or {}
         space = self.model.observation_space          # read keys from the model
         self.obs_keys = list(space.spaces) if isinstance(space, gym.spaces.Dict) else None
+        self._action_dim: int | None = None
 
-    def get_action(self, infos, **kw):
-        if self.obs_keys is not None:                 # Dict obs
-            obs = {k: np.asarray(infos[k]).squeeze(1) for k in self.obs_keys}
+    def set_env(self, env):
+        super().set_env(env)
+        space = getattr(env, 'single_action_space', None) or getattr(
+            env, 'action_space', None
+        )
+        self._action_dim = (
+            int(np.asarray(space.shape)[-1]) if space is not None else None
+        )
+
+    @staticmethod
+    def _drop_time(a):
+        """Drop a leading size-1 time axis (axis 1) if present; else pass through.
+
+        State obs come as (n_env, 1, dim); image obs come as (n_env, H, W, 3)
+        with no time axis -- an unconditional squeeze(1) would crash on the latter.
+        """
+        a = np.asarray(a)
+        return a.squeeze(1) if a.ndim > 1 and a.shape[1] == 1 else a
+
+    def _build_obs(self, infos, idx):
+        """Assemble the policy observation for the envs in ``idx``."""
+        if self.encoder is not None:                  # imag-rl: encode real frames -> patch tokens
+            frames = self._drop_time(infos['pixels'])
+            emb = np.stack([self.encoder(frames[i]).numpy() for i in idx])  # (m, P, D)
+            obs = {self.obs_keys[0]: emb} if self.obs_keys is not None else emb
+        elif self.obs_keys is not None:               # Dict obs (simrl: pixels/goal/proprio/goal_proprio)
+            obs = {k: self._drop_time(infos[k])[idx] for k in self.obs_keys}
         else:                                         # flat Box obs
-            obs = np.asarray(infos['observation']).squeeze(1)  # wrapper's name for non-dict obs
+            obs = self._drop_time(infos['observation'])[idx]
         if self.vecnorm:
             obs = self.vecnorm.normalize_obs(obs)
+        return obs
+
+    def get_action(self, infos, **kw):
+        n = getattr(self.env, 'num_envs', 1)
+        obs = self._build_obs(infos, range(n))
         actions, _ = self.model.predict(obs, deterministic=True)
-        return actions
+        actions = np.asarray(actions).reshape(n, -1)
+
+        if self._action_dim is None:
+            raise RuntimeError('SB3Policy requires an environment action space')
+        actions = actions[:, :self._action_dim]
+        if 'action' in self.process:
+            actions = self.process['action'].inverse_transform(actions)
+        return np.asarray(actions)
 
 
 def img_transform():
@@ -79,11 +126,16 @@ class EncoderTransform:
     and returns the per-sample embedding (batch dim stripped) on CPU.
     """
 
-    def __init__(self, backbone, interp_pos_enc=True, device='cuda'):
+    def __init__(self, backbone, interp_pos_enc=True, device='cuda', drop_cls=False):
         self.transform = img_transform()
         self.backbone = backbone.to(device).eval().requires_grad_(False)
         self.interp_pos_enc = interp_pos_enc
         self.device = device
+        # When True, drop the leading CLS token so the output is the P patch
+        # tokens only -- matching the PreJEPA world model's encode
+        # (prejepa wm: ``last_hidden_state[:, 1:, :]``). imag-rl policies are
+        # trained on those patch tokens, so their real-frame eval obs must match.
+        self.drop_cls = drop_cls
 
     @torch.no_grad()
     def __call__(self, img):
@@ -93,12 +145,15 @@ class EncoderTransform:
         except TypeError:  # e.g. resnet classifier doesn't take the kwarg
             out = self.backbone(x)
         emb = getattr(out, 'last_hidden_state', None)
-        if emb is None:
+        if emb is not None:
+            if self.drop_cls:
+                emb = emb[:, 1:, :]     # (1, 1+P, D) -> (1, P, D), drop CLS
+        else:
             emb = getattr(out, 'pooler_output', None)
         if emb is None:
             emb = out.logits        # (1, P, pixel_dim)
             emb = emb.mean(dim=1)   # (1, pixel_dim)
-        return emb.squeeze(0).cpu() # (pixel_dim,)
+        return emb.squeeze(0).cpu() # (P, pixel_dim) if drop_cls else (pixel_dim,)
 
 
 def get_episodes_length(dataset, episodes):
@@ -242,7 +297,20 @@ def run(cfg: DictConfig):
     elif rl_algo and rl_algo in ALGOS:
         # find vecnorm path
         vecnorm_path = get_vecnorm_path(cfg, ckpt_path)
-        policy = SB3Policy(rl_algo, ckpt_path, vecnorm_path)
+        # imag-rl policies act on world-model dino patch tokens: build a
+        # CLS-dropping encoder so each real frame is turned into the (P, D)
+        # obs the policy trained on. simrl (no backbone configured) -> None.
+        rl_encoder = (
+            EncoderTransform(backbone, interp_pos_enc, drop_cls=True)
+            if cfg.get('backbone')
+            else None
+        )
+        # imag-rl (encoder set) also needs its first zscore-normalized action
+        # un-normalized; simrl (no encoder) keeps raw actions.
+        rl_process = process if rl_encoder is not None else None
+        policy = SB3Policy(
+            rl_algo, ckpt_path, vecnorm_path, encoder=rl_encoder, process=rl_process
+        )
     else:
         model = swm.policy.AutoActionableModel(str(ckpt_path))
         model = model.to('cuda')
