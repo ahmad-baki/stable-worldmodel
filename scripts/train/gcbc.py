@@ -384,11 +384,17 @@ def run(cfg):
         enable_checkpointing=True,
     )
 
+    # Only resume if a checkpoint from a previous run of THIS job already
+    # exists (e.g. SLURM requeue). On a fresh run the path can't exist yet —
+    # passing it would make the Manager refuse to start from scratch.
+    ckpt_path = f'{cache_dir}/{cfg.output_model_name}_weights.ckpt'
+    resume_ckpt = ckpt_path if os.path.exists(ckpt_path) else None
+
     manager = spt.Manager(
         trainer=trainer,
         module=gcbc_policy,
         data=data,
-        ckpt_path=f'{cache_dir}/{cfg.output_model_name}_weights.ckpt',
+        ckpt_path=resume_ckpt,
     )
     manager()
 

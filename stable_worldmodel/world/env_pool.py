@@ -84,6 +84,7 @@ class EnvPool:
         seed: int | list[int | None] | None = None,
         options: dict | list[dict | None] | None = None,
         mask: np.ndarray | None = None,
+        random_goal: bool = False,
     ) -> tuple[None, dict]:
         """Reset envs and return the stacked info dict.
 
@@ -102,7 +103,13 @@ class EnvPool:
         for i, env in enumerate(self.envs):
             if mask is not None and not mask[i]:
                 continue
-            _, per_env_infos[i] = env.reset(seed=seeds[i], options=opts[i])
+            # Pass random_goal via the options dict rather than as a reset
+            # kwarg: gym's built-in wrappers (TimeLimit/OrderEnforcing/...) forward
+            # `options` down to the base env but reject unknown reset kwargs.
+            _, per_env_infos[i] = env.reset(
+                seed=seeds[i],
+                options={**(opts[i] or {}), 'random_goal': random_goal},
+            )
             if seeds[i] is not None:
                 self.seeds[i] = seeds[i]
 

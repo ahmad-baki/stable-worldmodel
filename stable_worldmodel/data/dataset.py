@@ -72,6 +72,16 @@ class Dataset:
     def _load_slice(self, ep_idx: int, start: int, end: int) -> dict:
         raise NotImplementedError
 
+    def _load_slices(
+        self, ranges: list[tuple[int, int, int]]
+    ) -> list[dict]:
+        """Load several episode-local ranges.
+
+        Storage backends can override this to coalesce the ranges into one
+        read.  The default keeps all existing dataset implementations working.
+        """
+        return [self._load_slice(ep, start, end) for ep, start, end in ranges]
+
     def __len__(self) -> int:
         return len(self.clip_indices)
 
@@ -464,35 +474,23 @@ class GoalDataset:
     ) -> dict[str, torch.Tensor]:
         return self.dataset._load_slice(ep_idx, local_idx, local_idx + 1)
 
-    def __getitem__(self, idx: int):
-        wrapped_idx = self._index_mapping[idx]
-        steps = self.dataset[wrapped_idx]
-
-        if not self.goal_keys:
-            return steps
-
+    def _sample_goal_step(self, idx: int) -> tuple[int, int]:
         ep_idx, local_start = self._get_clip_info(idx)
-
         goal_kind = self._sample_goal_kind()
         if goal_kind == 'random':
-            goal_ep_idx, goal_local_idx = self._sample_random_step()
-        elif goal_kind == 'geometric_future':
-            goal_ep_idx, goal_local_idx = self._sample_geometric_future_step(
-                ep_idx, local_start
-            )
-        elif goal_kind == 'uniform_future':
-            goal_ep_idx, goal_local_idx = self._sample_uniform_future_step(
-                ep_idx, local_start
-            )
-        else:
-            frameskip = self.dataset.frameskip
-            goal_local_idx = (
-                local_start + (self.current_goal_offset - 1) * frameskip
-            )
-            goal_ep_idx = ep_idx
+            return self._sample_random_step()
+        if goal_kind == 'geometric_future':
+            return self._sample_geometric_future_step(ep_idx, local_start)
+        if goal_kind == 'uniform_future':
+            return self._sample_uniform_future_step(ep_idx, local_start)
 
-        goal_step = self._load_single_step(goal_ep_idx, goal_local_idx)
+        frameskip = self.dataset.frameskip
+        return (
+            ep_idx,
+            local_start + (self.current_goal_offset - 1) * frameskip,
+        )
 
+    def _add_goal(self, steps: dict, goal_step: dict) -> dict:
         for src_key, goal_key in self.goal_keys.items():
             if src_key not in goal_step or src_key not in steps:
                 continue
@@ -500,8 +498,50 @@ class GoalDataset:
             if goal_val.ndim == 0:
                 goal_val = goal_val.unsqueeze(0)
             steps[goal_key] = goal_val
-
         return steps
+
+    def __getitem__(self, idx: int):
+        wrapped_idx = self._index_mapping[idx]
+        steps = self.dataset[wrapped_idx]
+
+        if not self.goal_keys:
+            return steps
+
+        goal_ep_idx, goal_local_idx = self._sample_goal_step(idx)
+        goal_step = self._load_single_step(goal_ep_idx, goal_local_idx)
+        return self._add_goal(steps, goal_step)
+
+    def __getitems__(self, indices: list[int]) -> list[dict]:
+        """Fetch a DataLoader batch without discarding backend batching.
+
+        In particular, this keeps Lance reads at two coalesced operations per
+        batch (clips plus goals) instead of two random-access operations per
+        sample.
+        """
+        wrapped = [self._index_mapping[idx] for idx in indices]
+        batch_getitems = getattr(self.dataset, '__getitems__', None)
+        if callable(batch_getitems):
+            steps_batch = batch_getitems(wrapped)
+        else:
+            steps_batch = [self.dataset[idx] for idx in wrapped]
+
+        if not self.goal_keys:
+            return steps_batch
+
+        goal_locations = [self._sample_goal_step(idx) for idx in indices]
+        ranges = [(ep, step, step + 1) for ep, step in goal_locations]
+        batch_load_slices = getattr(self.dataset, '_load_slices', None)
+        if callable(batch_load_slices):
+            goal_steps = batch_load_slices(ranges)
+        else:
+            goal_steps = [
+                self._load_single_step(ep, step) for ep, step in goal_locations
+            ]
+
+        return [
+            self._add_goal(steps, goal_step)
+            for steps, goal_step in zip(steps_batch, goal_steps)
+        ]
 
 
 def episode_ids_per_clip(dataset) -> np.ndarray:

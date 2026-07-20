@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from stable_worldmodel.data import (
+    GoalDataset,
     LanceDataset,
     LanceWriter,
     convert,
@@ -137,6 +138,39 @@ def test_getitems_batched(tmp_path):
         np.testing.assert_allclose(
             batch[i]['proprio'].numpy(), single['proprio'].numpy()
         )
+
+
+def test_goal_dataset_preserves_lance_batched_reads(tmp_path, monkeypatch):
+    out = tmp_path / 'demo.lance'
+    _write_demo(out, ep_lengths=(8, 7))
+    ds = LanceDataset(
+        path=out,
+        num_steps=2,
+        keys_to_load=['pixels', 'action'],
+        keys_to_cache=['action'],
+    )
+    goal_ds = GoalDataset(
+        ds,
+        goal_probabilities=(0.0, 0.0, 1.0, 0.0),
+        current_goal_offset=2,
+        goal_keys={'pixels': 'goal_pixels'},
+        seed=0,
+    )
+
+    calls = []
+    original_load_slices = ds._load_slices
+
+    def counted_load_slices(ranges):
+        calls.append(ranges)
+        return original_load_slices(ranges)
+
+    monkeypatch.setattr(ds, '_load_slices', counted_load_slices)
+    batch = goal_ds.__getitems__([0, 1, 2])
+
+    assert len(batch) == 3
+    assert all(sample['goal_pixels'].shape[0] == 1 for sample in batch)
+    assert [len(ranges) for ranges in calls] == [3, 3]
+    assert all(sample['action'].shape == (2, 2) for sample in batch)
 
 
 def test_get_col_and_row(tmp_path):

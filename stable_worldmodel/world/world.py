@@ -332,6 +332,7 @@ class World:
         mode: str = 'auto',
         on_step=None,
         on_done=None,
+        random_goal: bool = False,
     ) -> None:
         """Drive the policy. Thin wrapper around :meth:`_run_iter` that
         invokes ``on_done(env_idx, ep_idx, world)`` for each completion."""
@@ -342,6 +343,7 @@ class World:
             options=options,
             mode=mode,
             on_step=on_step,
+            random_goal=random_goal,
         ):
             if on_done:
                 on_done(env_idx, ep_count, self)
@@ -354,6 +356,7 @@ class World:
         options: dict | None = None,
         mode: str = 'auto',
         on_step=None,
+        random_goal: bool = False,
     ):
         """Drive the policy and yield ``(env_idx, ep_count)`` on each
         episode completion. Letting callers consume completions as a

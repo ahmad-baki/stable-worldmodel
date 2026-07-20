@@ -244,6 +244,10 @@ class PushT(gym.Env):
 
         self.rng = np.random.default_rng(seed)
         options = options or {}
+        # random_goal may arrive inside the options dict -- that is the only way
+        # it can traverse gym's built-in wrappers (which forward `options` but
+        # reject arbitrary reset kwargs). Fall back to the direct kwarg.
+        random_goal = options.get('random_goal', random_goal)
 
         swm_spaces.reset_variation_space(
             self.variation_space,

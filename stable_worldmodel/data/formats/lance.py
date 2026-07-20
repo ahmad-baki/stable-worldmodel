@@ -87,28 +87,40 @@ def _encode_frame(frame: np.ndarray, jpeg_quality: int) -> bytes:
     return buf.getvalue()
 
 
-_SPAWN_FORCED = False
+_MP_START_FORCED = False
 
 
-def _force_spawn() -> None:
-    """Switch Linux multiprocessing to spawn — workaround for lancedb fork-unsafety."""
+def _force_forkserver() -> None:
+    """Switch Linux multiprocessing to a fork-safe start method for lancedb.
+
+    lance runs an internal async (Tokio) runtime; forking a process that has
+    already started it leaves the child with a half-initialized runtime that
+    can deadlock. ``forkserver`` launches a clean helper interpreter (with no
+    lance runtime) and forks DataLoader workers from *that*, so each worker
+    opens lance after the fork and gets its own runtime — the start method
+    lancedb itself recommends. Worker startup is also cheaper than ``spawn``
+    (a fork of the clean server vs a full re-exec + re-import per worker).
+    Falls back to ``spawn`` where forkserver is unavailable.
+    """
     import logging
     import multiprocessing as mp
     import sys
 
     import torch
 
-    global _SPAWN_FORCED
-    if _SPAWN_FORCED or sys.platform != 'linux':
-        _SPAWN_FORCED = True
+    global _MP_START_FORCED
+    if _MP_START_FORCED or sys.platform != 'linux':
+        _MP_START_FORCED = True
         return
-    _SPAWN_FORCED = True
+    _MP_START_FORCED = True
 
     if mp.get_start_method(allow_none=True) in (None, 'fork'):
+        methods = mp.get_all_start_methods()
+        target = 'forkserver' if 'forkserver' in methods else 'spawn'
         try:
-            mp.set_start_method('spawn', force=True)
+            mp.set_start_method(target, force=True)
         except RuntimeError as exc:
-            logging.warning('Could not switch to spawn (%s)', exc)
+            logging.warning('Could not switch to %s (%s)', target, exc)
     try:
         torch.multiprocessing.set_sharing_strategy('file_system')
     except RuntimeError:
@@ -165,7 +177,7 @@ class LanceDataset(Dataset):
         self._perm = None
         self._fetch_columns: list[str] | None = None
 
-        _force_spawn()
+        _force_forkserver()
         table = self._connect_table()
         self._schema_names = list(table.schema.names)
         available = [
@@ -424,8 +436,8 @@ class LanceDataset(Dataset):
             tensor = tensor.permute(0, 3, 1, 2)
         return tensor
 
-    def _process_batch(self, ep_idx: int, g_start: int, batch) -> dict:
-        g_end = g_start + self.span
+    def _process_batch(self, g_start: int, span: int, batch) -> dict:
+        g_end = g_start + span
         steps: dict[str, Any] = {}
         for col in self._keys:
             if col in self._cache:
@@ -467,22 +479,28 @@ class LanceDataset(Dataset):
         return steps
 
     def _load_slice(self, ep_idx: int, start: int, end: int) -> dict:
-        g_start = int(self.offsets[ep_idx] + start)
-        rows = list(range(g_start, g_start + (end - start)))
-        batch = self._fetch_rows(rows)
-        steps = self._process_batch(ep_idx, g_start, batch)
-        return self.transform(steps) if self.transform else steps
+        return self._load_slices([(ep_idx, start, end)])[0]
 
-    def __getitems__(self, indices: list[int]) -> list[dict]:
+    def _load_slices(
+        self, ranges: list[tuple[int, int, int]]
+    ) -> list[dict]:
+        """Load arbitrary episode-local ranges with one coalesced Lance read."""
+        if not ranges:
+            return []
+
         all_rows: list[int] = []
         row_offsets: list[int] = []
-        sample_meta: list[tuple[int, int]] = []
-        for idx in indices:
-            ep_idx, start = self.clip_indices[idx]
+        spans: list[int] = []
+        global_starts: list[int] = []
+        for ep_idx, start, end in ranges:
+            if end < start:
+                raise ValueError(f'Invalid range: start={start}, end={end}')
+            span = end - start
             g_start = int(self.offsets[ep_idx] + start)
             row_offsets.append(len(all_rows))
-            all_rows.extend(range(g_start, g_start + self.span))
-            sample_meta.append((ep_idx, g_start))
+            spans.append(span)
+            global_starts.append(g_start)
+            all_rows.extend(range(g_start, g_start + span))
 
         big_batch = None
         if self._fetch_columns and all_rows:
@@ -494,23 +512,35 @@ class LanceDataset(Dataset):
             else:
                 row_lookup = {row: i for i, row in enumerate(unique_rows)}
                 gather = pa.array(
-                    [row_lookup[r] for r in all_rows], type=pa.int64()
+                    [row_lookup[row] for row in all_rows], type=pa.int64()
                 )
                 big_batch = unique_batch.take(gather)
 
         results: list[dict] = []
-        for i, (ep_idx, g_start) in enumerate(sample_meta):
+        for offset, span, g_start in zip(
+            row_offsets, spans, global_starts
+        ):
             sub_batch = (
-                big_batch.slice(row_offsets[i], self.span)
+                big_batch.slice(offset, span)
                 if big_batch is not None
                 else None
             )
-            steps = self._process_batch(ep_idx, g_start, sub_batch)
+            steps = self._process_batch(g_start, span, sub_batch)
             if self.transform:
                 steps = self.transform(steps)
+            results.append(steps)
+        return results
+
+    def __getitems__(self, indices: list[int]) -> list[dict]:
+        ranges = []
+        for idx in indices:
+            ep_idx, start = self.clip_indices[idx]
+            ranges.append((ep_idx, start, start + self.span))
+
+        results = self._load_slices(ranges)
+        for steps in results:
             if 'action' in steps:
                 steps['action'] = steps['action'].reshape(self.num_steps, -1)
-            results.append(steps)
         return results
 
     def get_col_data(self, col: str) -> np.ndarray:

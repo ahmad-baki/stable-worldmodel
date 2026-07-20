@@ -61,10 +61,11 @@ def lejepa_forward(self, batch, stage, cfg):
         f'{stage}/{k}': v.detach() for k, v in output.items() if 'loss' in k
     }
 
-    # mean_emb = ctx_emb.view(-1, ctx_emb.size(-1)).mean(dim=0)
-    std_emb = ctx_emb.view(-1, ctx_emb.size(-1)).std(dim=0)         # (B * ctx_len, D) -> (D,)
-    # mean_pred = pred_emb.view(-1, pred_emb.size(-1)).mean(dim=0)
-    std_pred = pred_emb.view(-1, pred_emb.size(-1)).std(dim=0)      # (B * n_preds, D) -> (D,)
+    # mean_emb = ctx_emb.reshape(-1, ctx_emb.size(-1)).mean(dim=0)
+    # .reshape (not .view): the .lance dataset yields non-contiguous tensors here.
+    std_emb = ctx_emb.reshape(-1, ctx_emb.size(-1)).std(dim=0)      # (B * ctx_len, D) -> (D,)
+    # mean_pred = pred_emb.reshape(-1, pred_emb.size(-1)).mean(dim=0)
+    std_pred = pred_emb.reshape(-1, pred_emb.size(-1)).std(dim=0)   # (B * n_preds, D) -> (D,)
 
     std_emb_mean = std_emb.mean(dim=0)
     std_pred_mean = std_pred.mean(dim=0)

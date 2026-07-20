@@ -28,6 +28,7 @@ dependencies = [
   "tqdm",
   "typer",
   "rich",
+  "stable-pretraining>=0.1.7",
 ]
 
 [project.scripts]
