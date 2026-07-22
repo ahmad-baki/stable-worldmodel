@@ -254,6 +254,25 @@ def get_gcbc_policy(cfg):
         embedding_dim = encoder.config.hidden_size
         encoder_trainable = True
         logging.info('Using trainable ViT tiny encoder (from scratch)')
+    elif encoder_type == 'lewm':
+        # Frozen encoder from a trained LeWM world model (its ViT CLS token +
+        # projector -> the LeWM latent). This puts GCBC in LeWM's own latent
+        # space so the checkpoint can later warm-start LeWM imag-rl. The LeWM
+        # latent is a single token per frame (num_patches forced to 1 below).
+        from stable_worldmodel.wm.gcrl.lewm_encoder import build_lewm_encoder
+
+        lewm_artifact = cfg.get('lewm_wm_artifact')
+        assert lewm_artifact, (
+            "encoder_type='lewm' requires cfg.lewm_wm_artifact "
+            "(the LeWM world-model wandb artifact)."
+        )
+        encoder, embedding_dim = build_lewm_encoder(
+            lewm_artifact, image_size=cfg.image_size
+        )
+        encoder_trainable = False
+        logging.info(
+            f'Using frozen LeWM encoder (CLS+projector), emb_dim={embedding_dim}'
+        )
     else:
         raise ValueError(f'Unknown encoder_type: {encoder_type}')
 
@@ -262,6 +281,8 @@ def get_gcbc_policy(cfg):
         'Image size must be multiple of patch size'
     )
     num_patches = (cfg.image_size // cfg.patch_size) ** 2
+    if encoder_type == 'lewm':
+        num_patches = 1  # LeWM latent is a single token per frame (CLS+projector)
     if cfg.dinowm.get('use_proprio_encoder', True):
         embedding_dim += cfg.dinowm.proprio_embed_dim  # Total embedding size
 

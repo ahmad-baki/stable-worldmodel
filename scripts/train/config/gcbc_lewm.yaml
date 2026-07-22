@@ -1,0 +1,76 @@
+# GCBC trained in LeWM's latent space (encoder_type: lewm).
+# Hyperparams copied from dinogcbc_4905585's actual run overrides
+# (batch 256, predictor depth 3 / heads 8 / pool_type attention_firstlayer,
+# predictor_lr 1.25e-4, num_trajectories 640, max_epochs 100, dataset .lance).
+# Three intentional differences from 4905585:
+#   * encoder_type: lewm (+ lewm_wm_artifact) -- LeWM CLS+projector latent
+#     instead of frozen DINO patch tokens (wm/gcrl/lewm_encoder.py).
+#   * output_model_name: lewmgcbc
+#   * frameskip: 5 (was 1) -- REQUIRED so the 10-D action head can warm-start
+#     the frameskip-5 LeWM imag-rl env.
+defaults:
+  - launcher: local_bc
+  - _self_
+
+hydra:
+  job:
+    chdir: true
+
+output_model_name: lewmgcbc
+dataset_name: pusht_expert_train.lance
+num_trajectories: 640
+
+# No DINO embedding cache: the LeWM encoder must run on raw pixels each step.
+cache_embeddings: false
+embed_dataset_name: null
+prefetch_factor: 2
+in_order: false
+val_num_workers: 4
+
+trainer:
+  max_epochs: 100
+  strategy: auto
+  devices: 1
+  accelerator: gpu
+  precision: bf16-mixed
+  log_every_n_steps: 1
+
+batch_size: 256
+num_workers: ${cpus_per_task}
+train_split: 0.9
+train_subset_fraction: 1.0
+seed: 42
+
+image_size: 224
+patch_size: 14
+
+n_steps: ${eval:'${dinowm.num_preds} + ${dinowm.history_size} - 1'}
+frameskip: 5   # deviation from dinogcbc (was 1): match frameskip-5 imag-rl envs
+
+dinowm:
+  history_size: 3
+  num_preds: 1
+  use_proprio_encoder: false
+  proprio_dim: 4
+  proprio_embed_dim: 10
+  action_dim: 2
+  action_embed_dim: 10
+
+predictor:
+  depth: 3
+  heads: 8
+  mlp_dim: 2048
+  dim_head: 64
+  dropout: 0.0
+  emb_dropout: 0.0
+  pool_type: attention_firstlayer
+
+# Encoder: frozen LeWM world-model encoder (CLS token + projector -> LeWM latent).
+encoder_type: lewm
+lewm_wm_artifact: ahmad-baki-karlsruhe-institute-of-technology/worldbench-world/lewm:latest
+
+predictor_lr: 1.25e-4
+proprio_encoder_lr: 1e-4
+encoder_lr: 1e-4
+
+dump_object: True
