@@ -170,7 +170,7 @@ class PreJEPA(torch.nn.Module):
             dim = extra_dims[i]
             extra_emb = embedding[..., start_dim : start_dim + dim]
             split_embed[f'{key}_emb'] = extra_emb[
-                :, :, 0, :
+                :, :, :, 0
             ]  # all patches are the same
             start_dim += dim
 
