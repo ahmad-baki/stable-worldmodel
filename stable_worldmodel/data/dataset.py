@@ -50,17 +50,18 @@ class Dataset:
         self.num_steps = num_steps
         self.span = num_steps * frameskip
         self.transform = transform
+        print(f"[Dataset] len(lengths): {len(lengths)}, num_traj: {num_traj}")
 
-        episode_ids = range(len(lengths))
+        self.episode_ids = range(len(lengths))
         if num_traj is not None and num_traj < len(lengths):
-            rng = np.random.default_rng(seed)
-            episode_ids = sorted(
-            rng.choice(len(lengths), size=num_traj, replace=False).tolist()
+           rng = np.random.default_rng(seed)
+           self.episode_ids = sorted(
+           rng.choice(len(lengths), size=num_traj, replace=False).tolist()
         )
-
+        print(f"[Dataset] Training with {len(self.episode_ids)} episodes")
         self.clip_indices = [
             (ep, start)
-            for ep in episode_ids
+            for ep in self.episode_ids
             if lengths[ep] >= self.span
             for start in range(lengths[ep] - self.span + 1)
         ]
@@ -107,6 +108,9 @@ class Dataset:
 
     def load_episode(self, episode_idx: int) -> dict:
         return self._load_slice(episode_idx, 0, self.lengths[episode_idx])
+
+    def load_episodes(self, episodes: list[tuple[int, int, int]]):
+        return self._load_slices(episodes)
 
     def get_col_data(self, col: str) -> np.ndarray:
         raise NotImplementedError
@@ -583,7 +587,7 @@ def trajectory_split(
     """Split *dataset* into ``(train, val)`` along whole-trajectory boundaries.
 
     Every clip from a given episode lands entirely in one side, so no
-    trajectory leaks across the split (unlike a clip-level ``random_split``,
+    load_episode leaks across the split (unlike a clip-level ``random_split``,
     where overlapping windows from one episode can straddle both sides).
 
     The fraction is applied to the **episode count**, not the clip count, so

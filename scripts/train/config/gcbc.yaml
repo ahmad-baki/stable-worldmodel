@@ -9,7 +9,7 @@ hydra:
     chdir: true
 
 output_model_name: dinogcbc
-dataset_name: pusht_expert_train.h5
+dataset_name: pusht_expert_success.h5
 num_trajectories: null
 
 # Frozen-encoder embedding cache. Precompute once with
