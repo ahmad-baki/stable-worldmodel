@@ -51,6 +51,75 @@ def get_dataset(cfg, dataset_name):
     return dataset
 
 
+def resolve_wandb_ckpt(cfg):
+    """Resolve a checkpoint path from a wandb run's reference artifact.
+
+    Reads ``cfg.wandb`` (``entity``, ``project``, ``run`` and optional
+    ``alias``), picks the ``model`` artifact the training run logged and
+    follows its ``file://`` reference to the on-disk checkpoint.
+
+    Note that ``file://`` references only resolve on the filesystem that
+    logged them (SaveCkptCallback stores a path, not the weights).
+    """
+    import wandb
+
+    wb = cfg.wandb
+    if wb.get('run', None) is None:
+        raise ValueError(
+            "policy='wandb' requires a wandb run id: set wandb.run=<run_id> "
+            '(e.g. wandb.run=dinowm_4069292).'
+        )
+
+    api = wandb.Api()
+    run = api.run(f'{wb.entity}/{wb.project}/{wb.run}')
+
+    artifacts = [a for a in run.logged_artifacts() if a.type == 'model']
+    if not artifacts:
+        raise ValueError(f"No 'model' artifact logged by run {wb.run}")
+
+    alias = wb.get('alias', 'best')
+    artifact = next(
+        (a for a in artifacts if alias in a.aliases), artifacts[-1]
+    )
+    print(f'Using artifact {artifact.name} (aliases: {artifact.aliases})')
+
+    ckpt_path = None
+    for entry in artifact.manifest.entries.values():
+        if entry.ref and entry.ref.startswith('file://'):
+            ckpt_path = entry.ref[len('file://') :]
+            break
+    if ckpt_path is None:
+        raise ValueError(
+            f'No file:// reference found in artifact {artifact.name}'
+        )
+
+    ckpt_path = Path(ckpt_path)
+    if not ckpt_path.exists():
+        raise FileNotFoundError(
+            f'Artifact {artifact.name} references {ckpt_path}, which does not '
+            'exist on this filesystem.'
+        )
+    return ckpt_path
+
+
+def load_wandb_model(cfg):
+    """Load the world model referenced by the configured wandb run.
+
+    SaveCkptCallback logs one of two shapes: a pickled full module
+    (``*_object.ckpt``, when ``dump_object`` is on) or a state dict
+    (``weights_epoch_*.pt``) that is rebuilt from the sibling
+    ``config.json``. Returns ``(model, ckpt_path)``.
+    """
+    ckpt_path = resolve_wandb_ckpt(cfg)
+
+    if ckpt_path.suffix == '.pt':
+        # state dict + config.json living next to it
+        return swm.wm.utils.load_pretrained(str(ckpt_path)), ckpt_path
+
+    # pickled module: pull out the submodule the solvers plan with
+    return swm.policy.AutoCostModel(str(ckpt_path)), ckpt_path
+
+
 @hydra.main(version_base=None, config_path='./config', config_name='pusht')
 def run(cfg: DictConfig):
     """Run evaluation of dinowm vs random policy."""
@@ -94,9 +163,14 @@ def run(cfg: DictConfig):
 
     # -- run evaluation
     policy = cfg.get('policy', 'random')
+    ckpt_path = None  # set when the model comes from a wandb artifact
 
     if policy != 'random':
-        model = swm.wm.utils.load_pretrained(cfg.policy)
+        if policy == 'wandb':
+            # follow the training run's reference artifact to the checkpoint
+            model, ckpt_path = load_wandb_model(cfg)
+        else:
+            model = swm.wm.utils.load_pretrained(cfg.policy)
         if cfg.get('bf16', False):
             model = model.to(torch.bfloat16)
         model = model.to('cuda')
@@ -122,13 +196,14 @@ def run(cfg: DictConfig):
     else:
         policy = swm.policy.RandomPolicy()
 
-    results_path = (
-        Path(
+    if ckpt_path is not None:
+        results_path = ckpt_path.parent / 'eval'
+    elif cfg.policy != 'random':
+        results_path = Path(
             swm.data.utils.get_cache_dir(sub_folder='checkpoints'), cfg.policy
         ).parent
-        if cfg.policy != 'random'
-        else Path(__file__).parent
-    )
+    else:
+        results_path = Path(__file__).parent
 
     # sample the episodes and the starting indices
     episode_len = get_episodes_length(dataset, ep_indices)
@@ -203,6 +278,12 @@ def run(cfg: DictConfig):
             )
         print('Warmup done.')
 
+    plan_video_envs = cfg.eval.get('plan_video_envs', None)
+    if plan_video_envs is not None:
+        plan_video_envs = list(
+            OmegaConf.to_container(plan_video_envs, resolve=True)
+        )
+
     start_time = time.time()
     with autocast_ctx:
         metrics = world.evaluate(
@@ -215,6 +296,7 @@ def run(cfg: DictConfig):
                 cfg.eval.get('callables'), resolve=True
             ),
             video=results_path,
+            plan_video_envs=plan_video_envs,
         )
     end_time = time.time()
 

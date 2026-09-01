@@ -4,6 +4,7 @@ from .cem import (
     EliteCostRecorder,
     EliteSpreadRecorder,
     MeanShiftRecorder,
+    PlanRecorder,
     VarNormRecorder,
 )
 from .common import (
@@ -27,4 +28,5 @@ __all__ = [
     'VarNormRecorder',
     'MeanShiftRecorder',
     'EliteSpreadRecorder',
+    'PlanRecorder',
 ]

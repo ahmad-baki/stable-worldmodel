@@ -500,6 +500,11 @@ class WorldModelPolicy(BasePolicy):
         self.transform = transform or {}
         self._action_buffer: list[deque[torch.Tensor]] | None = None
         self._next_init: torch.Tensor | None = None
+        self._plan_records: dict[int, dict[str, Any]] = {}
+        # Restricts which envs get plan records built. De-normalizing every
+        # elite of every iteration is not free, and a 50-env eval typically
+        # renders only one or two of them. ``None`` means record everything.
+        self.plan_record_envs: set[int] | None = None
 
     @property
     def flatten_receding_horizon(self) -> int:
@@ -539,6 +544,7 @@ class WorldModelPolicy(BasePolicy):
         assert 'pixels' in info_dict, "'pixels' must be provided in info_dict"
         assert 'goal' in info_dict, "'goal' must be provided in info_dict"
 
+        raw_info = info_dict
         info_dict = self._prepare_info(info_dict)
         n_envs = self.env.num_envs
 
@@ -605,6 +611,8 @@ class WorldModelPolicy(BasePolicy):
             for row, env_i in enumerate(replan_idx):
                 self._action_buffer[env_i].extend(plan[row])
 
+            self._record_plan(outputs, replan_idx, raw_info, plan)
+
         action_dim = self.env.single_action_space.shape[-1]
         action = torch.full((n_envs, action_dim), float('nan'))
         for i in range(n_envs):
@@ -618,6 +626,109 @@ class WorldModelPolicy(BasePolicy):
             action = self.process['action'].inverse_transform(action)
 
         return action
+
+    # -- plan recording (for plan-video rendering) -------------------------
+
+    def pop_plan_records(self) -> dict[int, dict[str, Any]]:
+        """Return and clear the plan records from the most recent replan.
+
+        Keyed by env index; only envs that actually replanned on this step
+        appear. Empty unless the solver was configured with a
+        :class:`~stable_worldmodel.solver.callbacks.PlanRecorder`.
+        """
+        records, self._plan_records = self._plan_records, {}
+        return records
+
+    def _env_actions(self, actions: Any) -> np.ndarray:
+        """Un-flatten and de-normalize a plan into per-env-step actions.
+
+        Solvers work in a flattened, normalized space: the last axis packs
+        ``action_block`` consecutive actions together, and ``process['action']``
+        z-scored them. This maps ``(..., horizon, action_dim * action_block)``
+        back to ``(..., horizon * action_block, action_dim)`` in env units, so
+        consumers see the actual sequence the env will be stepped with.
+        """
+        if torch.is_tensor(actions):
+            actions = actions.detach().cpu().numpy()
+        actions = np.asarray(actions, dtype=np.float32)
+
+        dim = self.env.single_action_space.shape[-1]
+        actions = actions.reshape(*actions.shape[:-2], -1, dim)
+
+        if 'action' in self.process:
+            shape = actions.shape
+            flat = self.process['action'].inverse_transform(
+                actions.reshape(-1, dim)
+            )
+            actions = np.asarray(flat, dtype=np.float32).reshape(shape)
+
+        return actions
+
+    def _record_plan(
+        self,
+        outputs: dict,
+        replan_idx: list[int],
+        raw_info: dict,
+        plan: torch.Tensor,
+    ) -> None:
+        """Stash what the solver just did, for later plan-video rendering.
+
+        Stays env-agnostic: action sequences are de-normalized to env units but
+        not interpreted -- how a sequence maps to pixels is the renderer's job.
+        ``raw_info`` is the *pre-normalization* info dict, so state entries like
+        ``pos_agent`` are in env units and indexed by global env index.
+        """
+        history = outputs.get('callbacks', {}).get('plan')
+        if not history:
+            return
+
+        # Solvers optimize in consecutive batches of the envs they were handed,
+        # so walking the batches in order recovers the solve-local ordering,
+        # which `replan_idx` maps back to global env indices.
+        wanted = self.plan_record_envs
+        by_row: dict[int, list[dict]] = {}
+        row = 0
+        for batch in history:
+            if not batch:
+                continue
+            for j in range(batch[0]['mean'].shape[0]):
+                pos = row + j
+                if wanted is not None and (
+                    pos >= len(replan_idx) or replan_idx[pos] not in wanted
+                ):
+                    continue
+                by_row[pos] = [
+                    {
+                        'step': it['step'],
+                        'elites': self._env_actions(it['elites'][j]),
+                        'mean': self._env_actions(it['mean'][j]),
+                        'elite_cost_mean': float(it['elite_cost_mean'][j]),
+                        'elite_cost_min': float(it['elite_cost_min'][j]),
+                        'pop_cost_mean': float(it['pop_cost_mean'][j]),
+                    }
+                    for it in batch
+                ]
+            row += batch[0]['mean'].shape[0]
+
+        for row, env_i in enumerate(replan_idx):
+            iters = by_row.get(row)
+            if iters is None:
+                continue
+            self._plan_records[env_i] = {
+                'iters': iters,
+                # the slice actually queued for execution, in env units
+                'plan': self._env_actions(plan[row][None])[0],
+                # Must copy: EnvPool hands back one persistent stacked dict
+                # and writes each env's info into it in place, so a view here
+                # would silently track the live env instead of plan time.
+                'state': {
+                    k: np.array(v[env_i], copy=True)
+                    for k, v in raw_info.items()
+                    if isinstance(v, np.ndarray)
+                    and v.ndim <= 3
+                    and v.dtype.kind in 'fiub'
+                },
+            }
 
 
 def _load_model_with_attribute(run_name, attribute_name, cache_dir=None):

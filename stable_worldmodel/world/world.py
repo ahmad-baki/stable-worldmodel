@@ -46,6 +46,7 @@ from typing import Any
 import gymnasium as gym
 import numpy as np
 import torch
+from loguru import logger as logging
 
 from stable_worldmodel.policy import Policy
 
@@ -175,6 +176,7 @@ class World:
         eval_budget: int | None = None,
         callables: list[dict] | None = None,
         random_goal: bool = False,
+        plan_video_envs: list[int] | None = None,
     ) -> dict:
         """Run the attached policy and return aggregated metrics.
 
@@ -211,6 +213,13 @@ class World:
                 'in_dataset': bool}}}``; if ``in_dataset`` is True, the
                 ``value`` names a key in the sliced dataset state and the
                 per-env value is deep-copied in.
+            plan_video_envs: Env indices whose video should also show the
+                planner's optimization -- the env is held still while the
+                candidate action sequences collapse onto the chosen plan,
+                which is then drawn over the executed rollout. Requires a
+                planning policy whose solver carries a
+                :class:`~stable_worldmodel.solver.callbacks.PlanRecorder`.
+                Rendering is slow, so keep this to a few envs.
 
         Returns:
             A dict with ``'success_rate'`` (percent), ``'episode_successes'``
@@ -227,9 +236,12 @@ class World:
                 callables,
                 video,
                 mode,
+                plan_video_envs,
             )
         mode = reset_mode or 'auto'
-        return self._evaluate(episodes, seed, options, video, mode, random_goal)
+        return self._evaluate(
+            episodes, seed, options, video, mode, random_goal, plan_video_envs
+        )
 
     def collect(
         self,
@@ -332,6 +344,7 @@ class World:
         mode: str = 'auto',
         on_step=None,
         on_done=None,
+        on_plan=None,
         random_goal: bool = False,
     ) -> None:
         """Drive the policy. Thin wrapper around :meth:`_run_iter` that
@@ -343,6 +356,7 @@ class World:
             options=options,
             mode=mode,
             on_step=on_step,
+            on_plan=on_plan,
             random_goal=random_goal,
         ):
             if on_done:
@@ -356,6 +370,7 @@ class World:
         options: dict | None = None,
         mode: str = 'auto',
         on_step=None,
+        on_plan=None,
         random_goal: bool = False,
     ):
         """Drive the policy and yield ``(env_idx, ep_count)`` on each
@@ -378,6 +393,11 @@ class World:
 
         for t in range(max_steps if max_steps is not None else 2**63):
             actions = self._get_actions()
+
+            # Fires while ``self.infos`` still holds the observation the policy
+            # planned on -- the only point where plan and obs line up.
+            if on_plan:
+                on_plan(self)
 
             mask = alive if not alive.all() else None
             _, self.rewards, self.terminateds, self.truncateds, self.infos = (
@@ -417,20 +437,37 @@ class World:
     def _get_actions(self) -> np.ndarray:
         return self.policy.get_action(self.infos)
 
-    def _evaluate(self, episodes, seed, options, video, mode, random_goal) -> dict:
+    def _evaluate(
+        self,
+        episodes,
+        seed,
+        options,
+        video,
+        mode,
+        random_goal,
+        plan_video_envs=None,
+    ) -> dict:
         results = {
             'success_rate': 0.0,
             'episode_successes': np.zeros(episodes),
             'seeds': np.zeros(episodes, dtype=np.int64),
         }
         frames: dict[int, list] = defaultdict(list) if video else None
+        muxer = _make_plan_muxer(self, video, plan_video_envs)
+
+        def on_plan(world):
+            if muxer is not None:
+                muxer.consume(world)
 
         def on_step(world):
             if frames is not None:
                 for i in range(world.num_envs):
                     f = world.infos['pixels'][i]
-                    frame = f[-1] if f.ndim > 3 else f
-                    frames[i].append(np.asarray(frame).copy())
+                    frame = np.asarray(f[-1] if f.ndim > 3 else f).copy()
+                    if muxer is not None:
+                        frames[i].extend(muxer.frames_for(i, frame))
+                    else:
+                        frames[i].append(frame)
 
         def on_done(env_idx, ep_idx, world):
             results['episode_successes'][ep_idx] = world.terminateds[env_idx]
@@ -453,6 +490,7 @@ class World:
             mode=mode,
             on_step=on_step,
             on_done=on_done,
+            on_plan=on_plan,
             random_goal=random_goal,
         )
 
@@ -476,6 +514,7 @@ class World:
         callables,
         video,
         mode,
+        plan_video_envs=None,
     ) -> dict:
         n = len(episodes_idx)
         assert n == self.num_envs
@@ -514,6 +553,13 @@ class World:
             'seeds': init_state.get('seed'),
         }
         frames: dict[int, list] = defaultdict(list) if video else None
+        muxer = _make_plan_muxer(self, video, plan_video_envs)
+
+        def on_plan(world):
+            # The dataset goal is re-pinned after every step, so it is already
+            # in ``infos`` here and the plan panels can show it.
+            if muxer is not None:
+                muxer.consume(world)
 
         def on_step(world):
             world.infos.update(deepcopy(goal_snapshot))
@@ -521,10 +567,18 @@ class World:
             if frames is not None:
                 for i in range(world.num_envs):
                     f = world.infos['pixels'][i]
-                    frame = f[-1] if f.ndim > 3 else f
-                    frames[i].append(np.asarray(frame).copy())
+                    frame = np.asarray(f[-1] if f.ndim > 3 else f).copy()
+                    if muxer is not None:
+                        frames[i].extend(muxer.frames_for(i, frame))
+                    else:
+                        frames[i].append(frame)
 
-        self._run(max_steps=eval_budget, mode=mode, on_step=on_step)
+        self._run(
+            max_steps=eval_budget,
+            mode=mode,
+            on_step=on_step,
+            on_plan=on_plan,
+        )
 
         results['success_rate'] = (
             float(results['episode_successes'].sum()) / n * 100.0
@@ -544,7 +598,42 @@ class World:
                 _save_video(
                     Path(video) / f'env_{env_idx}_{outcome}.mp4', f
                 )
+        if muxer is not None:
+            muxer.close()
         return results
+
+
+def _make_plan_muxer(world, video, plan_video_envs):
+    """Build the plan-video muxer, or ``None`` if it can't/shouldn't run.
+
+    Silent no-op when plan video wasn't asked for or there's no video at all;
+    warns when it was asked for but the policy can't supply plan records, since
+    that is almost always a missing ``PlanRecorder`` on the solver.
+    """
+    if not plan_video_envs or video is None:
+        return None
+
+    if not hasattr(world.policy, 'pop_plan_records'):
+        logging.warning(
+            'plan_video_envs was set but the policy exposes no plan records; '
+            'skipping plan video. Use a WorldModelPolicy whose solver has a '
+            'PlanRecorder callback.'
+        )
+        return None
+
+    from .plan_viz import PlanVideoMuxer, make_path_mapper
+
+    img_size = int(world.infos['pixels'].shape[-2])
+    mapper = make_path_mapper(world.envs.envs[0], img_size)
+    if mapper is None:
+        logging.info(
+            'Env actions are not spatially interpretable; plan video will '
+            'show action-vs-time curves instead of trajectory overlays.'
+        )
+    muxer = PlanVideoMuxer(plan_video_envs, path_mapper=mapper)
+    if hasattr(world.policy, 'plan_record_envs'):
+        world.policy.plan_record_envs = set(muxer.env_ids)
+    return muxer
 
 
 def _save_video(path: Path, frames: list[np.ndarray], fps: int = 15) -> None:

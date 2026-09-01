@@ -7,3 +7,11 @@ n_steps: 30
 topk: 30
 device: "cuda"
 seed: ${seed}
+
+# Records the per-iteration CEM state that `eval.plan_video_envs` renders into
+# the eval video. Comment out to disable; it is inert (a small per-solve memory
+# cost, nothing rendered) whenever `plan_video_envs` is null.
+callbacks:
+  - _target_: stable_worldmodel.solver.callbacks.PlanRecorder
+    stride: 2
+    max_elites: 24
